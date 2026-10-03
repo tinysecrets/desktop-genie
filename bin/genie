@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="$HOME/.config/genie"
+STATE="$BASE/state"
+mkdir -p "$STATE"
+LOCK="$STATE/genie-instance.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "GENIE already running; duplicate launch blocked." >&2
+  exit 0
+fi
+export DISPLAY="${DISPLAY:-:0}"
+export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
+PY="$BASE/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+if [ "$#" -eq 0 ]; then
+  exec "$PY" "$BASE/genie_app.py"
+fi
+exec "$PY" "$BASE/genie.py" "$@"

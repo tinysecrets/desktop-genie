@@ -1,0 +1,17 @@
+{
+  "primary_browser": "nousresearch/hermes-4-405b",
+  "primary_local": "ollama/hermes3:8b",
+  "shared_router": "http://127.0.0.1:11435/v1",
+  "openrouter_paid_disabled": true,
+  "fallback_policy": "free-first",
+  "integrations": {
+    "genie": "/home/justin/.config/genie",
+    "hermes_chat": "http://127.0.0.1:8788/",
+    "dai": "http://127.0.0.1:11435/v1",
+    "agent_s": "http://127.0.0.1:8765",
+    "voice": "http://127.0.0.1:8766",
+    "opencode": "ollama/hermes3:8b",
+    "openclaw": "ollama/hermes3:8b",
+    "omni": "OpenCode -> HERMES"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "updated": 1790981098,
+  "policy": "free-first; persistent roster; unavailable providers stay registered",
+  "members": [
+    {
+      "handle": "hermes-405b",
+      "name": "Hermes 4 405B",
+      "provider": "puter",
+      "model": "nousresearch/hermes-4-405b",
+      "role": "flagship reasoning / general brain",
+      "priority": 1,
+      "favorite": true
+    },
+    {
+      "handle": "hermes-3-405b",
+      "name": "Hermes 3 Llama 3.1 405B",
+      "provider": "puter",
+      "model": "nousresearch/hermes-3-llama-3.1-405b",
+      "role": "agentic / conversational 405B",
+      "priority": 2
+    },
+    {
+      "handle": "hermes-14b",
+      "name": "Hermes 4 14B",
+      "provider": "puter",
+      "model": "nousresearch/hermes-4-14b",
+      "role": "fast lightweight brain",
+      "priority": 3
+    },
+    {
+      "handle": "hermes-3-70b",
+      "name": "Hermes 3 Llama 3.1 70B",
+      "provider": "puter",
+      "model": "nousresearch/hermes-3-llama-3.1-70b",
+      "role": "fast agent / dialogue",
+      "priority": 4
+    },
+    {
+      "handle": "openrouter-free",
+      "name": "OpenRouter FREE Pool",
+      "provider": "openrouter",
+      "model": "auto",
+      "role": "dynamic free fallback pool",
+      "priority": 20
+    },
+    {
+      "handle": "local-ollama",
+      "name": "Local Ollama",
+      "provider": "ollama",
+      "model": "auto",
+      "role": "offline/local fallback",
+      "priority": 30
+    },
+    {
+      "handle": "openclaw",
+      "name": "OpenClaw",
+      "provider": "local",
+      "model": "auto",
+      "role": "agent / execution specialist",
+      "priority": 40
+    },
+    {
+      "handle": "opencode",
+      "name": "OpenCode",
+      "provider": "local",
+      "model": "auto",
+      "role": "coding specialist",
+      "priority": 41
+    },
+    {
+      "handle": "openhands",
+      "name": "OpenHands",
+      "provider": "local",
+      "model": "auto",
+      "role": "software execution specialist",
+      "priority": 42
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "HERMES",
+  "ui": "http://127.0.0.1:8788/",
+  "policy": "free-first",
+  "primary": "nousresearch/hermes-4-405b",
+  "fallbacks": [
+    "nousresearch/hermes-3-llama-3.1-405b",
+    "nousresearch/hermes-4-14b",
+    "nousresearch/hermes-3-llama-3.1-70b"
+  ],
+  "catalog": "puter.ai.listModels()",
+  "transport": "Puter.js browser",
+  "api_keys_in_browser": false
+}

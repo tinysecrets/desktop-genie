@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-*
+*.log
+state/
+browser-profile/
+vault.key
+openrouter.env
+*.env
+.DS_Store
