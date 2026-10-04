@@ -1,4 +1,5 @@
 import ast
+import json
 import pathlib
 import unittest
 
@@ -32,19 +33,68 @@ class GenieRegression(unittest.TestCase):
         for name in ("genie.py", "genie_app.py", "genie_ext.py", "genie_workstation.py"):
             ast.parse(self.read(name), filename=name)
 
-    def test_conversation_memory_and_cancel(self):
+    # --- GENIE 2.1+: conversational memory, stop control, desktop QoL ---
+
+    def test_conversational_memory_and_stop_control(self):
         s = self.read("genie.py")
         self.assertIn("def run_agent(task, preferred_model=None, history=None)", s)
         self.assertIn("CANCEL_REQUESTED", s)
         self.assertIn("def load_session", s)
+        self.assertIn("def save_session", s)
         self.assertIn("def export_session", s)
 
-    def test_desktop_controls(self):
+    def test_cli_session_commands(self):
+        s = self.read("genie.py")
+        for command in ("/help", "/new", "/history", "/save"):
+            self.assertIn(command, s)
+
+    def test_desktop_stop_export_copy(self):
         s = self.read("genie_app.py")
         self.assertIn("def send_or_stop", s)
         self.assertIn("def export_chat", s)
         self.assertIn("def copy_last_answer", s)
-        self.assertIn("Model:", s)
+        self.assertIn("genie.request_cancel()", s)
+        # Deferred tkinter callbacks must not capture the `as exc` variable,
+        # which Python deletes at the end of the except block.
+        self.assertNotIn("lambda: self.finish(\"\", str(exc)", s)
+
+    # --- GENIE 2.2+: automatic intelligence stack / brain routing ---
+
+    def test_auto_router_architecture(self):
+        s = self.read("genie.py")
+        for needle in (
+            "def classify_task",
+            "def load_routing",
+            "def build_brain_chain",
+            "def provider_available",
+            "def call_member",
+            "def call_ollama",
+            "def run_member_loop",
+            "def run_free_pool",
+        ):
+            self.assertIn(needle, s)
+
+    def test_router_keeps_hard_policy_gate(self):
+        s = self.read("genie.py")
+        # Every brain tier must flow through the same policy gate.
+        self.assertIn("policy.authorize(name, args, approved=POLICY_APPROVED)", s)
+
+    def test_team_config_has_routing(self):
+        data = json.loads((ROOT / "config" / "ai-team.json").read_text())
+        self.assertIn("routing", data)
+        chain = data["routing"].get("chain") or {}
+        self.assertIn("simple", chain)
+        self.assertIn("complex", chain)
+        handles = {m.get("handle") for m in data.get("members") or []}
+        for task_class, steps in chain.items():
+            self.assertTrue(steps, f"empty chain for {task_class}")
+            for handle in steps:
+                self.assertIn(handle, handles, f"chain handle {handle} missing from roster")
+
+    def test_team_config_parses(self):
+        data = json.loads((ROOT / "config" / "ai-team.json").read_text())
+        self.assertIsInstance(data.get("members"), list)
+        self.assertTrue(data["members"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
