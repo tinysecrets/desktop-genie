@@ -167,7 +167,7 @@ class GenieApp:
         img=Image.open(GENIE_DIR / "wah-lah-genie.png").convert("RGBA")
         img.thumbnail((size,size), Image.Resampling.LANCZOS)
         mask=Image.new("L", img.size, 0)
-        ImageDraw.ellipse((0,0,img.width-1,img.height-1), fill=255)
+        ImageDraw.Draw(mask).ellipse((0,0,img.width-1,img.height-1), fill=255)
         img.putalpha(mask)
         return ImageTk.PhotoImage(img)
 

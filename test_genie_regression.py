@@ -122,6 +122,7 @@ class GenieRegression(unittest.TestCase):
         self.assertIn('GOLD = "#D4AF37"', s)
         # The mascot is drawn as a clean circular medallion.
         self.assertIn("def _medallion", s)
+        self.assertIn("ImageDraw.Draw(mask)", s)
         # The competing legacy gold-only look was removed.
         self.assertNotIn("def build_sidebar", s)
         self.assertNotIn("def build_center", s)
