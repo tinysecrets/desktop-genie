@@ -32,5 +32,19 @@ class GenieRegression(unittest.TestCase):
         for name in ("genie.py", "genie_app.py", "genie_ext.py", "genie_workstation.py"):
             ast.parse(self.read(name), filename=name)
 
+    def test_conversation_memory_and_cancel(self):
+        s = self.read("genie.py")
+        self.assertIn("def run_agent(task, preferred_model=None, history=None)", s)
+        self.assertIn("CANCEL_REQUESTED", s)
+        self.assertIn("def load_session", s)
+        self.assertIn("def export_session", s)
+
+    def test_desktop_controls(self):
+        s = self.read("genie_app.py")
+        self.assertIn("def send_or_stop", s)
+        self.assertIn("def export_chat", s)
+        self.assertIn("def copy_last_answer", s)
+        self.assertIn("Model:", s)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

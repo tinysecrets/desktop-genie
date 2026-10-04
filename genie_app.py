@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import (
     BOTH, END, LEFT, RIGHT, X, BooleanVar, StringVar, Tk, Text, Canvas,
-    Frame, Scrollbar, Label, Button
+    Frame, Scrollbar, Label, Button, filedialog
 )
 from contextlib import redirect_stdout
 from io import BytesIO, StringIO
@@ -131,9 +131,11 @@ class GenieApp:
 
         self.composer=Frame(self.center,bg=self.ui_panel2,highlightthickness=1,highlightbackground="#34415D"); self.composer.pack(fill=X,pady=(10,9))
         self.input=Text(self.composer,height=3,wrap="word",bg=self.ui_panel2,fg=self.ui_text,insertbackground=self.ui_violet2,selectbackground="#3B315E",relief="flat",bd=0,padx=16,pady=13,font=("Noto Sans",13)); self.input.pack(side=LEFT,fill=BOTH,expand=True,padx=(5,0),pady=5); self.input.bind("<Control-Return>",self.send_event)
-        self.send_button=Button(self.composer,text="SEND  →",command=self.send,bg=self.ui_violet,fg="#090711",activebackground=self.ui_violet2,activeforeground="#090711",relief="flat",bd=0,padx=18,pady=12,font=("Noto Sans",9,"bold"),cursor="hand2"); self.send_button.pack(side=RIGHT,padx=9,pady=9)
+        self.send_button=Button(self.composer,text="SEND  →",command=self.send_or_stop,bg=self.ui_violet,fg="#090711",activebackground=self.ui_violet2,activeforeground="#090711",relief="flat",bd=0,padx=18,pady=12,font=("Noto Sans",9,"bold"),cursor="hand2"); self.send_button.pack(side=RIGHT,padx=9,pady=9)
         self.bottom=Frame(self.center,bg=self.ui_bg); self.bottom.pack(fill=X)
         self.status_label=Label(self.bottom,textvariable=self.status,bg=self.ui_bg,fg=self.ui_mint,font=("Noto Sans",9,"bold")); self.status_label.pack(side=LEFT,padx=3,pady=4)
+        Button(self.bottom,text="COPY LAST",command=self.copy_last_answer,bg=self.ui_panel2,fg=self.ui_dim,activebackground=self.ui_panel3,activeforeground=self.ui_text,relief="flat",bd=0,padx=10,pady=4,font=("Noto Sans",8,"bold"),cursor="hand2").pack(side=RIGHT,padx=3,pady=3)
+        Button(self.bottom,text="EXPORT",command=self.export_chat,bg=self.ui_panel2,fg=self.ui_dim,activebackground=self.ui_panel3,activeforeground=self.ui_text,relief="flat",bd=0,padx=10,pady=4,font=("Noto Sans",8,"bold"),cursor="hand2").pack(side=RIGHT,padx=3,pady=3)
         Label(self.bottom,text="CTRL + ENTER  /  SEND",bg=self.ui_bg,fg=self.ui_dim,font=("Noto Sans",8)).pack(side=RIGHT,padx=3,pady=4)
         self.chat_frame=Frame(self.center,bg=self.ui_panel,highlightthickness=1,highlightbackground=self.ui_line); self.chat_frame.pack(fill=BOTH,expand=True); self.chat_frame.rowconfigure(0,weight=1); self.chat_frame.columnconfigure(0,weight=1)
         self.chat=Text(self.chat_frame,wrap="word",state="disabled",bg=self.ui_panel,fg=self.ui_text,insertbackground=self.ui_violet2,selectbackground="#3B315E",relief="flat",bd=0,padx=20,pady=16,font=("Noto Sans",12),spacing3=9)
@@ -522,6 +524,31 @@ class GenieApp:
             fg=CREAM_DIM if self.auto_context.get() else DANGER
         )
 
+    def export_chat(self):
+        if not self.history:
+            self.status.set("Nothing to export yet")
+            return
+        default = f"genie-chat-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
+        path = filedialog.asksaveasfilename(defaultextension=".md", initialfile=default, filetypes=[("Markdown", "*.md"), ("Text", "*.txt")])
+        if not path:
+            return
+        lines = ["# GENIE conversation", "", f"Exported {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+        for item in self.history:
+            who = "You" if item.get("role") == "user" else "GENIE"
+            lines.extend([f"**{who}**", "", item.get("content", ""), "", "---", ""])
+        Path(path).write_text("\n".join(lines), encoding="utf-8")
+        self.status.set(f"Exported {len(self.history)} messages")
+        self.append_activity("chat exported")
+
+    def copy_last_answer(self):
+        if not self.last_answer:
+            self.status.set("No answer to copy yet")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.last_answer)
+        self.status.set("Last answer copied")
+        self.append_activity("answer copied")
+
     def new_chat(self):
         if self.busy:
             return
@@ -544,71 +571,86 @@ class GenieApp:
             for x in recent
         )
 
+    def send_or_stop(self):
+        if self.busy:
+            genie.CANCEL_REQUESTED = True
+            self.status.set("Stopping GENIE…")
+            self.append_activity("stop requested")
+            return
+        self.send()
+
     def send(self):
         if self.busy:
             return
         prompt = self.input.get("1.0", END).strip()
         if not prompt:
             return
-
+        context_history = None
+        if self.auto_context.get():
+            context_history = [
+                {"role": x.get("role"), "content": x.get("content", "")}
+                for x in self.history[-CONTEXT_TURNS:]
+                if x.get("role") in ("user", "assistant")
+            ]
         self.input.delete("1.0", END)
         self.append_message("user", prompt)
         self.busy = True
-        self.send_button.configure(state="disabled", text="✦  WORKING…")
+        genie.CANCEL_REQUESTED = False
+        self.send_button.configure(state="normal", text="■  STOP", bg=self.ui_violet2, activebackground=self.ui_violet)
         self.status.set("GENIE is working your wish…")
         self.live_badge.configure(text="◉  GENIE WORKING", bg=GOLD_MUTE)
         self.append_activity("GENIE started")
+        threading.Thread(target=self.run_genie, args=(prompt, context_history), daemon=True).start()
 
-        threading.Thread(
-            target=self.run_genie,
-            args=(prompt, self.build_context()),
-            daemon=True,
-        ).start()
-
-    def run_genie(self, prompt, context):
+    def run_genie(self, prompt, context_history):
         task = prompt
-        if context:
-            task = (
-                "Use the following recent conversation as context. "
-                "Do not repeat it unless needed. Keep the current request as the objective.\n\n"
-                f"RECENT CONTEXT:\n{context}\n\nCURRENT REQUEST:\n{prompt}"
-            )
         try:
             class LiveCapture(StringIO):
                 def write(inner, chunk):
                     written = super().write(chunk)
                     for line in str(chunk).splitlines():
                         line = line.strip()
-                        if line.startswith("[tool]") or line.startswith("[action]"):
+                        if line.startswith("[tool]") or line.startswith("[action]") or line.startswith("Model:"):
                             self.root.after(0, lambda msg=line: self.append_activity(msg))
                     return written
             captured = LiveCapture()
-            # GUI uses the same hard policy as CLI. Only an explicit approval phrase
-            # in the user's current prompt can authorize a gated operation.
             genie.POLICY_APPROVED = bool(re.search(r"\b(i\s+approve|approve(?:d)?|explicitly\s+approve)\b", prompt, re.I))
             with redirect_stdout(captured):
-                result = genie.run_agent(task)
+                try:
+                    import inspect
+                    supports_history = "history" in inspect.signature(genie.run_agent).parameters
+                except Exception:
+                    supports_history = False
+                if context_history and supports_history:
+                    result = genie.run_agent(prompt, history=context_history)
+                elif context_history:
+                    context = "\n".join(f"{'User' if x['role'] == 'user' else 'GENIE'}: {x['content']}" for x in context_history)
+                    result = genie.run_agent("Use this recent conversation as context.\n\n" + context + "\n\nCURRENT REQUEST:\n" + prompt)
+                else:
+                    result = genie.run_agent(task)
             genie.POLICY_APPROVED = False
             raw = captured.getvalue()
-            answer = (result or raw).strip()
-            if not answer:
-                answer = "GENIE did not return a usable response."
-            tools_used = [
-                line.strip() for line in raw.splitlines()
-                if line.strip().startswith("[tool]")
-            ]
+            answer = (result or raw).strip() or "GENIE did not return a usable response."
+            tools_used = [line.strip() for line in raw.splitlines() if line.strip().startswith("[tool]")]
             self.root.after(0, lambda: self.finish(answer, None, tools_used))
         except Exception as exc:
-            self.root.after(0, lambda: self.finish("", str(exc), []))
+            genie.POLICY_APPROVED = False
+            message = str(exc)
+            self.root.after(0, lambda: self.finish("", message, []))
 
     def finish(self, answer, error, tools_used):
         self.busy = False
-        self.send_button.configure(state="normal", text="✦  SEND WISH")
-        self.live_badge.configure(text="●  GENIE ONLINE", bg=SURFACE_WARM)
+        self.send_button.configure(state="normal", text="✦  SEND WISH", bg=self.ui_violet, activebackground=self.ui_violet2)
+        self.live_badge.configure(text="●  GENIE ONLINE", bg="#10182A")
         if error:
-            self.append_message("assistant", f"GENIE error: {error}")
-            self.status.set("GENIE paused • error")
-            self.append_activity("request failed")
+            if error == "CANCELLED":
+                self.append_message("assistant", "Wish cancelled — GENIE stopped before finishing.")
+                self.status.set("Wish cancelled")
+                self.append_activity("wish cancelled")
+            else:
+                self.append_message("assistant", f"GENIE error: {error}")
+                self.status.set("GENIE paused • error")
+                self.append_activity("request failed")
         else:
             self.last_answer = answer
             self.append_message("assistant", answer)

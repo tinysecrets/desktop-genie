@@ -23,6 +23,9 @@ import genie_workstation as workstation
 import genie_policy as policy
 
 POLICY_APPROVED = False
+CANCEL_REQUESTED = False
+GENIE_VERSION = "2.1.0"
+MAX_SESSION_TURNS = 12
 
 MAX_TOOL_ROUNDS = 32
 MAX_OUTPUT = 12000
@@ -877,7 +880,9 @@ def call_model(model_id, messages):
     return choices[0].get("message") or {}
 
 
-def run_agent(task, preferred_model=None):
+def run_agent(task, preferred_model=None, history=None):
+    global CANCEL_REQUESTED
+    CANCEL_REQUESTED = False
     models = refresh_catalog()
 
     if not models:
@@ -910,10 +915,15 @@ def run_agent(task, preferred_model=None):
 
     attempted = set()
 
-    messages = [
-        {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": task}
-    ]
+    messages = [{"role": "system", "content": SYSTEM}]
+    for turn in (history or [])[-(MAX_SESSION_TURNS * 2):]:
+        if not isinstance(turn, dict):
+            continue
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
+    messages.append({"role": "user", "content": task})
 
     for model in ranked:
         model_id = model.get("id")
@@ -934,6 +944,8 @@ def run_agent(task, preferred_model=None):
             current_messages = list(messages)
 
             for _round in range(MAX_TOOL_ROUNDS):
+                if CANCEL_REQUESTED:
+                    raise RuntimeError("CANCELLED")
                 response = call_model(model_id, current_messages)
 
                 content = clean_content(response.get("content"))
@@ -954,6 +966,8 @@ def run_agent(task, preferred_model=None):
 
                 if tool_calls:
                     for call in tool_calls:
+                        if CANCEL_REQUESTED:
+                            raise RuntimeError("CANCELLED")
                         function = call.get("function") or {}
                         name = function.get("name")
                         raw_args = function.get("arguments") or "{}"
@@ -988,6 +1002,8 @@ def run_agent(task, preferred_model=None):
             raise RuntimeError("TOOL_LOOP_LIMIT")
 
         except Exception as e:
+            if isinstance(e, RuntimeError) and str(e) == "CANCELLED":
+                raise
             print(f"Model failed: {e}")
             print("Trying next capable FREE model...")
             continue
@@ -1080,6 +1096,34 @@ def doctor():
 
 
 STATE = CONFIG / "state"
+SESSION_FILE = STATE / "cli-chat.json"
+
+def load_session():
+    try:
+        data = json.loads(SESSION_FILE.read_text())
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict) and x.get("role") in ("user", "assistant")][-MAX_SESSION_TURNS * 2:]
+    except Exception:
+        pass
+    return []
+
+def save_session(session):
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        SESSION_FILE.write_text(json.dumps(session[-MAX_SESSION_TURNS * 2:], indent=2, ensure_ascii=False))
+    except Exception:
+        pass
+
+def export_session(session, target=None):
+    path = Path(target).expanduser() if target else Path.home() / f"genie-chat-{time.strftime('%Y%m%d-%H%M%S')}.md"
+    lines = ["# GENIE conversation", "", f"Exported {time.strftime('%Y-%m-%d %H:%M:%S')}", ""]
+    for item in session:
+        who = "You" if item.get("role") == "user" else "GENIE"
+        lines.extend([f"**{who}**", "", str(item.get("content", "")), "", "---", ""])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
 LEGACY_PID = Path.home() / ".desktop-commander-remote.pid"
 
 
@@ -1126,9 +1170,11 @@ def commander_status():
 
 
 def interactive():
+    global POLICY_APPROVED
     print()
     print("=" * 78)
     print(" GENIE — AUTONOMOUS FREE AI ORCHESTRATOR")
+    print(f" Version {GENIE_VERSION} • conversational memory enabled")
     print("=" * 78)
     print()
     print("Live FREE catalog is refreshed automatically.")
@@ -1327,6 +1373,8 @@ def interactive():
 
 
     # Normal conversational objective loop.
+    session = load_session()
+    print(f"Session memory: {len(session)} messages loaded.")
     while True:
         try:
             task = input("Genie> ").strip()
@@ -1343,6 +1391,30 @@ def interactive():
             return
 
         if task.startswith("/"):
+            command = task.split(None, 1)[0].lower()
+            if command in {"/help", "/?"}:
+                print("Commands: /help /new /history /save [path] /voice /team /ask @handle message /hermes")
+                continue
+            if command == "/new":
+                session = []
+                save_session(session)
+                print("Session memory cleared.")
+                continue
+            if command == "/history":
+                if not session:
+                    print("Session memory is empty.")
+                else:
+                    for item in session[-MAX_SESSION_TURNS * 2:]:
+                        who = "You" if item.get("role") == "user" else "GENIE"
+                        print(f"{who}: {item.get('content', '')}")
+                continue
+            if command == "/save":
+                target = task.split(None, 1)[1].strip() if len(task.split(None, 1)) > 1 else None
+                try:
+                    print(f"Saved: {export_session(session, target)}")
+                except Exception as e:
+                    print(f"Export failed: {e}")
+                continue
             if task.lower() == "/voice" or task.lower().startswith("/voice "):
                 voice_command(task[6:])
                 continue
@@ -1383,12 +1455,15 @@ def interactive():
                 continue
 
             print(f"Unknown command: {task.split()[0]}")
-            print("Available: /voice, /team, /ask @handle message")
+            print("Available: /help, /new, /history, /save [path], /voice, /team, /ask @handle message, /hermes")
             print()
             continue
 
         try:
-            run_agent(task, selected)
+            answer = run_agent(task, selected, history=session)
+            session.extend([{"role": "user", "content": task}, {"role": "assistant", "content": answer}])
+            session = session[-MAX_SESSION_TURNS * 2:]
+            save_session(session)
         except Exception as e:
             print()
             print(f"GENIE ERROR: {e}")
