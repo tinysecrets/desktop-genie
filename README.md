@@ -42,8 +42,17 @@ Puter.js inside a persistent local Chromium profile (`~/.config/genie/puter-prof
 ```
 genie puter login            # one-time: visible browser, sign in to Puter
 genie puter status           # session/bridge health
-genie puter models [filter]  # live catalog via puter.ai.listModels()
+genie puter verify           # prove the live Opus/Fable/Hermes catalog
+genie puter models [filter]  # full live catalog via puter.ai.listModels()
 ```
+
+Login robustness (v2.3.1): `puter.auth.signIn()` requires a user gesture and
+can be popup-blocked or abandoned (`auth_window_closed`), so the flow tries
+the SDK popup first, then automatically opens the normal `puter.com/login`
+page in the window as the reliable path. If the window is closed early GENIE
+fails fast with clear instructions instead of hanging; progress is reported
+every 15s, and a successful sign-in immediately runs `genie puter verify`
+against the live catalog.
 
 Bridge behavior:
 - After the one-time sign-in, all Puter brains run headless against the saved

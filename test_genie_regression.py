@@ -107,11 +107,23 @@ class GenieRegression(unittest.TestCase):
         self.assertIn("import puter_bridge", s)
         self.assertIn("puter_bridge.chat(messages, model=resolved, tools=TOOLS)", s)
         self.assertIn("def puter_command", s)
+        self.assertIn("def puter_verify", s)
         bridge = self.read("puter_bridge.py")
         self.assertIn("puter.ai.listModels()", bridge)
         self.assertIn("puter.ai.chat(", bridge)
         self.assertIn("normalize: true", bridge)
         self.assertIn("class PuterBridgeError", bridge)
+
+    def test_puter_login_is_robust(self):
+        bridge = self.read("puter_bridge.py")
+        # Closed auth window must fail fast with a stable code.
+        self.assertIn("PUTER_LOGIN_WINDOW_CLOSED", bridge)
+        # Reliable in-page fallback when the SDK popup is blocked.
+        self.assertIn("https://puter.com/login", bridge)
+        # Post sign-in live-catalog verification exists.
+        self.assertIn("def verify(", bridge)
+        s = self.read("genie.py")
+        self.assertIn("genie puter status | login | verify | models", s)
 
     def test_resolve_model_prefers_free_variant(self):
         import importlib.util

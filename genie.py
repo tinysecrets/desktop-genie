@@ -24,7 +24,7 @@ import genie_policy as policy
 
 POLICY_APPROVED = False
 
-GENIE_VERSION = "2.3.0"
+GENIE_VERSION = "2.3.1"
 
 MAX_TOOL_ROUNDS = 32
 MAX_OUTPUT = 12000
@@ -2008,8 +2008,40 @@ def self_audit():
     return 0 if not failures else 1
 
 
+def puter_verify():
+    """Print live-catalog verification of GENIE's Puter brains."""
+    import puter_bridge
+    print()
+    try:
+        report = puter_bridge.verify()
+    except puter_bridge.PuterBridgeError as exc:
+        print(f"Verification unavailable: {exc}")
+        print("Sign in first: genie puter login")
+        print()
+        return
+    print(f"Live Puter catalog: {report['models']} models, "
+          f"{report['free_models']} zero-cost")
+    print()
+    for handle, info in report["brains"].items():
+        if not info.get("requested"):
+            print(f"{handle:14} not in roster")
+            continue
+        if not info.get("found"):
+            print(f"{handle:14} MISS  {info['requested']} "
+                  f"(passes through as '{info['resolved']}')")
+            continue
+        cost = info.get("cost") or {}
+        price = (f"in={cost.get('input')} out={cost.get('output')} "
+                 f"per {cost.get('tokens', '?')}")
+        free_note = " • has :free variant" if info.get("free_variant") else ""
+        print(f"{handle:14} LIVE  {info['resolved']} "
+              f"[{info.get('served_by')}] ctx={info.get('context')} "
+              f"{price}{free_note}")
+    print()
+
+
 def puter_command(argument):
-    """Manage the Puter.js free bridge: status | login | models [filter]."""
+    """Manage the Puter.js free bridge: status | login | verify | models [filter]."""
     import puter_bridge
     parts = (argument or "").strip().split(None, 1)
     action = (parts[0] or "status").lower()
@@ -2032,18 +2064,35 @@ def puter_command(argument):
     if action == "login":
         print()
         print("Opening a visible browser for Puter sign-in...")
-        print("Complete the Puter login in that window; GENIE waits.")
+        print("If no popup appears, GENIE opens the puter.com login page in")
+        print("the window itself - sign in there and GENIE detects it.")
         try:
             result = puter_bridge.login()
-            if result.get("already_signed_in"):
-                print("Already signed in - the Puter free bridge is ready.")
-            else:
-                print("Signed in. The Puter free bridge is now live for GENIE.")
         except puter_bridge.PuterBridgeError as exc:
-            print(f"Login did not complete: {exc}")
+            code = str(exc)
+            if code == "PUTER_LOGIN_WINDOW_CLOSED":
+                print("The browser window was closed before sign-in completed.")
+                print("No credentials were stored. Run `genie puter login` and")
+                print("keep the window open until GENIE confirms the sign-in.")
+            else:
+                print(f"Login did not complete: {code}")
+            puter_bridge.close()
+            print()
+            return
+        if result.get("already_signed_in"):
+            print("Already signed in - the Puter free bridge is ready.")
+        else:
+            print("Signed in. Verifying against the live Puter catalog...")
+        try:
+            puter_verify()
         finally:
             puter_bridge.close()
+        print("The Puter free bridge is now live for GENIE.")
         print()
+        return
+
+    if action == "verify":
+        puter_verify()
         return
 
     if action == "models":
@@ -2071,7 +2120,7 @@ def puter_command(argument):
         print()
         return
 
-    print("Usage: genie puter status | login | models [filter]")
+    print("Usage: genie puter status | login | verify | models [filter]")
 
 
 def main():

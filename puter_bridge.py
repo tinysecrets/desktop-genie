@@ -194,7 +194,17 @@ def available():
 
 
 def login(timeout=LOGIN_WAIT_SECONDS):
-    """Interactive one-time sign-in using a VISIBLE browser window."""
+    """Interactive one-time sign-in using a VISIBLE browser window.
+
+    Robustness notes (from the live failure mode):
+    - puter.auth.signIn() opens a popup and must be triggered by a user
+      action; called programmatically the browser may block it or Puter
+      rejects with popup_blocked. We still try it (it works on some builds),
+      but the RELIABLE path is the built-in login UI on puter.com itself,
+      which we open automatically after a short grace period.
+    - If the human closes the window, we fail fast with a clear code
+      instead of burning the whole timeout.
+    """
     with _lock:
         page = _ensure_page(headless=False)
         if _signed_in(page):
@@ -204,6 +214,7 @@ def login(timeout=LOGIN_WAIT_SECONDS):
             })
             return {"ok": True, "already_signed_in": True}
 
+        # Best effort: SDK popup sign-in (may be popup-blocked; harmless).
         try:
             page.evaluate(
                 "() => { try { puter.auth.signIn(); } catch (e) {} }"
@@ -211,15 +222,58 @@ def login(timeout=LOGIN_WAIT_SECONDS):
         except Exception:
             pass
 
-        deadline = time.time() + timeout
+        start = time.time()
+        deadline = start + timeout
+        fallback_done = False
+        last_tick = -1
+
         while time.time() < deadline:
             time.sleep(2)
+
+            # Fail fast when the browser window was closed.
+            try:
+                if _page is None or _page.is_closed():
+                    raise PuterBridgeError("PUTER_LOGIN_WINDOW_CLOSED")
+            except PuterBridgeError:
+                raise
+            except Exception:
+                raise PuterBridgeError("PUTER_LOGIN_WINDOW_CLOSED")
+
             if _signed_in(page):
                 _write_json(STATUS_CACHE, {
                     "checked_at": time.time(), "signed_in": True,
                     "playwright": True, "profile": str(PROFILE_DIR), "error": None,
                 })
                 return {"ok": True, "already_signed_in": False}
+
+            elapsed = int(time.time() - start)
+
+            # Reliable fallback: the normal puter.com login UI in-page.
+            # Signing into puter.com itself establishes the same session.
+            if not fallback_done and elapsed >= 10:
+                fallback_done = True
+                try:
+                    if "login" not in (page.url or ""):
+                        page.goto("https://puter.com/login",
+                                  wait_until="domcontentloaded", timeout=60000)
+                except Exception:
+                    pass
+
+            # Keep any auth popup visible and in front.
+            try:
+                for extra in (_context.pages if _context else []):
+                    if extra is not _page and not extra.is_closed():
+                        extra.bring_to_front()
+            except Exception:
+                pass
+
+            if elapsed // 15 != last_tick:
+                last_tick = elapsed // 15
+                hint = ("complete the sign-in in the browser window"
+                        if fallback_done else
+                        "waiting for the Puter sign-in window")
+                print(f"[puter login] {elapsed}s - {hint} "
+                      f"({int(deadline - time.time())}s left)")
 
         raise PuterBridgeError("PUTER_LOGIN_TIMEOUT")
 
@@ -262,6 +316,68 @@ def list_models(force=False, max_age=MODEL_TTL):
 
         _write_json(MODEL_CACHE, {"checked_at": time.time(), "models": models})
         return models
+
+
+# --------------------------------------------------------------------------
+# Verification: prove which brains Puter actually serves (no assumptions)
+# --------------------------------------------------------------------------
+
+TEAM_FILE = ROOT / "ai-team.json"
+VERIFICATION_BRAINS = (
+    "opus-55", "fable-51", "hermes-405b",
+    "hermes-3-405b", "hermes-14b", "hermes-3-70b",
+)
+
+
+def verify(force=False):
+    """Check the LIVE Puter catalog against GENIE's roster brains.
+
+    Returns {"ok": bool, "models": total, "brains": {handle: {...}}}.
+    Every entry records what the requested roster id actually resolved to,
+    its live cost, and whether a zero-cost variant exists.
+    """
+    models = list_models(force=force)
+
+    roster = {}
+    try:
+        data = json.loads(TEAM_FILE.read_text())
+        for member in data.get("members") or []:
+            if member.get("handle") in VERIFICATION_BRAINS:
+                roster[member["handle"]] = member
+    except Exception:
+        pass
+
+    brains = {}
+    for handle in VERIFICATION_BRAINS:
+        member = roster.get(handle) or {}
+        requested = member.get("model") or ""
+        resolved = resolve_model(requested, models)
+        entry = next(
+            (m for m in models if m.get("id") == resolved), None
+        )
+        base = (resolved or "").split(":")[0]
+        free_variant = any(
+            (m.get("id") or "").startswith(base + ":")
+            and _model_cost(m) == 0
+            for m in models
+        ) if base else False
+        brains[handle] = {
+            "requested": requested,
+            "resolved": resolved,
+            "found": entry is not None,
+            "free_variant": free_variant,
+            "cost": (entry or {}).get("cost"),
+            "context": (entry or {}).get("context"),
+            "served_by": (entry or {}).get("provider"),
+        }
+
+    free_count = sum(1 for m in models if _model_cost(m) == 0)
+    return {
+        "ok": True,
+        "models": len(models),
+        "free_models": free_count,
+        "brains": brains,
+    }
 
 
 def _model_cost(model):

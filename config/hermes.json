@@ -14,6 +14,7 @@
   "bridge_commands": {
     "status": "genie puter status",
     "login": "genie puter login",
+    "verify": "genie puter verify",
     "models": "genie puter models [filter]"
   },
   "rest_fallback": "puter_provider.py (paid plan, PUTER_AUTH_TOKEN only)",
