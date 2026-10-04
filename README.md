@@ -5,6 +5,16 @@ Canonical source repository for the live desktop Genie runtime.
 Runtime config: ~/.config/genie
 Launcher: ~/bin/genie
 
+## Puter Free bridge (v2.3.1)
+
+GENIE uses a persistent Chromium profile for Puter.js rather than requiring an API key in the browser. The login flow keeps a visible window open, reports progress, detects early window closure, and opens the normal Puter login page as a fallback. After authentication, verify the live model catalog before routing work.
+
+Commands:
+- `genie puter status` — bridge/authentication status
+- `genie puter login` — interactive sign-in with live progress and fail-fast errors
+- `genie puter verify` — force-refresh and verify the live Opus/Fable/Hermes roster
+- `genie puter models [filter]` — list currently available free models
+
 ## Layout
 - `genie*.py`, `puter_provider.py`: desktop Genie application and integrations
 - `config/`: model/team/runtime configuration (secrets excluded)

@@ -14,6 +14,8 @@ PUPPETEER_ROOT = os.environ.get(
 class PuterBridgeError(RuntimeError):
     pass
 
+PUTER_LOGIN_WINDOW_CLOSED = "PUTER_LOGIN_WINDOW_CLOSED"
+
 def _env():
     env = os.environ.copy()
     env["GENIE_PUTER_PROFILE"] = str(PROFILE)
@@ -133,7 +135,7 @@ def chat(messages, tools=None, model=None, max_tokens=12000, temperature=.2):
         "max_tokens":max_tokens, "temperature":temperature
     }, timeout=240)
 
-def login():
+def login(timeout=240):
     # Stop any headless daemon first so Chromium can reuse the persistent profile.
     try:
         if SOCKET.exists():
@@ -146,10 +148,85 @@ def login():
             time.sleep(.5)
     except Exception:
         pass
-    result = subprocess.run(["node",str(NODE),"login"], env=_env(), text=True, capture_output=True, timeout=240)
-    if result.returncode:
-        raise PuterBridgeError(result.stderr.strip() or "PUTER_LOGIN_FAILED")
-    return json.loads(result.stdout.strip() or "{}")
+    proc = subprocess.Popen(
+        ["node", str(NODE), "login"], env=_env(), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
+    )
+    deadline = time.time() + timeout
+    final = None
+    try:
+        while time.time() < deadline:
+            line = proc.stdout.readline() if proc.stdout else ""
+            if line:
+                line = line.rstrip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        final = json.loads(line)
+                    except Exception:
+                        pass
+                else:
+                    print(line, flush=True)
+                continue
+            if proc.poll() is not None:
+                break
+            time.sleep(.2)
+        if proc.poll() is None:
+            proc.kill()
+            raise PuterBridgeError("PUTER_LOGIN_TIMEOUT")
+        if proc.returncode:
+            raise PuterBridgeError((final or {}).get("error") or "PUTER_LOGIN_FAILED")
+        return final or {"authenticated": True}
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+def _model_cost(model):
+    cost = model.get("cost") or model.get("pricing") or {}
+    try:
+        if isinstance(cost, dict):
+            return float(cost.get("input", 0) or 0) + float(cost.get("output", 0) or 0)
+        return float(cost or 0)
+    except Exception:
+        return 0.0
+
+TEAM_FILE = CONFIG / "ai-team.json"
+VERIFICATION_BRAINS = ("opus-55", "fable-51", "hermes-405b", "hermes-3-405b", "hermes-14b", "hermes-3-70b")
+
+def verify(force=False):
+    catalog_data = _request({"op":"models"}, timeout=90) if force else models()
+    catalog = catalog_data.get("models") if isinstance(catalog_data, dict) else catalog_data
+    catalog = catalog or []
+    roster = {}
+    try:
+        data = json.loads(TEAM_FILE.read_text())
+        for member in data.get("members") or []:
+            if member.get("handle") in VERIFICATION_BRAINS:
+                roster[member["handle"]] = member
+    except Exception:
+        pass
+    brains = {}
+    for handle in VERIFICATION_BRAINS:
+        member = roster.get(handle) or {}
+        requested = member.get("model") or ""
+        try:
+            resolved = resolve_model(requested, {"models": catalog})
+            entry = next((m for m in catalog if m.get("id") == resolved), None)
+            base = (resolved or "").split(":")[0]
+            free_variant = any(
+                (m.get("id") or "").startswith(base + ":") and _model_cost(m) == 0
+                for m in catalog
+            ) if base else False
+            brains[handle] = {
+                "requested": requested, "resolved": resolved, "found": entry is not None,
+                "free_variant": free_variant, "cost": (entry or {}).get("cost"),
+                "context": (entry or {}).get("context"), "served_by": (entry or {}).get("provider"),
+            }
+        except Exception as exc:
+            brains[handle] = {"requested": requested, "resolved": None, "found": False,
+                              "free_variant": False, "error": str(exc)}
+    return {"ok": True, "models": len(catalog),
+            "free_models": sum(1 for m in catalog if _model_cost(m) == 0),
+            "brains": brains}
 
 def free_models():
     data = models()

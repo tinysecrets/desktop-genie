@@ -105,8 +105,10 @@ class GenieRegression(unittest.TestCase):
         n = self.read("puter_bridge_node.js")
         for needle in ("puter_bridge", "genie puter login", "genie puter models"):
             self.assertIn(needle, s)
-        for needle in ("def status", "def models", "def chat", "def login", "PUTER_AUTH_REQUIRED", "_free"):
+        for needle in ("def status", "def models", "def chat", "def login", "def verify", "PUTER_AUTH_REQUIRED", "PUTER_LOGIN_WINDOW_CLOSED", "_free"):
             self.assertIn(needle, b)
+        self.assertIn("genie puter verify", s)
+        self.assertIn("puter.com/login", n)
         self.assertIn("puter.ai.chat", n)
         self.assertIn("puter.ai.listModels", n)
         self.assertIn("puter.auth.signIn", n)

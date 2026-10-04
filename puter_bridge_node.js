@@ -85,16 +85,50 @@ async function login() {
   await page.waitForFunction(() => window.__GENIE_PUTER_READY === true, {timeout:30000});
   const already = await page.evaluate(()=>Boolean(puter.auth.isSignedIn()));
   if(!already) {
-    await page.click('#signin');
-    const deadline = Date.now()+180000;
+    console.log('[puter login] 0s - opening Puter sign-in (complete it in the visible browser window)');
+    try { await page.click('#signin'); } catch(e) {}
+    const deadline = Date.now()+240000;
+    let fallbackDone = false;
+    let loginPage = null;
+    let lastTick = -1;
+    const start = Date.now();
     while(Date.now()<deadline) {
-      const state = await page.evaluate(()=>({signed:Boolean(puter.auth.isSignedIn()), err:window.__GENIE_LOGIN_ERROR||null}));
+      await new Promise(r=>setTimeout(r,1000));
+      if(!page || page.isClosed()) throw new Error('PUTER_LOGIN_WINDOW_CLOSED');
+      const state = await page.evaluate(()=>({
+        signed:Boolean(puter.auth.isSignedIn()),
+        err:window.__GENIE_LOGIN_ERROR||null
+      })).catch(()=>({closed:true}));
+      if(state.closed || !page || page.isClosed()) throw new Error('PUTER_LOGIN_WINDOW_CLOSED');
       if(state.signed) break;
       if(state.err) throw new Error(state.err);
-      await new Promise(r=>setTimeout(r,1000));
+      const elapsed=Math.floor((Date.now()-start)/1000);
+      if(!fallbackDone && elapsed>=10) {
+        fallbackDone=true;
+        console.log('[puter login] 10s - opening the reliable Puter login page');
+        try {
+          loginPage = await browser.newPage();
+          await loginPage.goto('https://puter.com/login', {waitUntil:'domcontentloaded', timeout:60000});
+          await loginPage.bringToFront();
+        } catch(e) {
+          console.log('[puter login] fallback open failed: '+String(e.message||e));
+        }
+      }
+      if(loginPage && loginPage.isClosed()) throw new Error('PUTER_LOGIN_WINDOW_CLOSED');
+      try {
+        const pages = await browser.pages();
+        const front = loginPage && !loginPage.isClosed() ? loginPage : page;
+        await front.bringToFront();
+      } catch(e) {}
+      if(elapsed>0 && elapsed%15===0 && elapsed!==lastTick) {
+        lastTick=elapsed;
+        console.log('[puter login] '+elapsed+'s - '+(fallbackDone?'waiting for Puter sign-in':'waiting for sign-in')+
+          ' ('+Math.max(0,240-elapsed)+'s left)');
+      }
     }
+    if(loginPage && !loginPage.isClosed()) { try { await loginPage.close(); } catch(e){} }
   }
-  const ok = await page.evaluate(()=>Boolean(puter.auth.isSignedIn()));
+  const ok = await page.evaluate(()=>Boolean(puter.auth.isSignedIn())).catch(()=>false);
   if(!ok) throw new Error('PUTER_LOGIN_TIMEOUT');
   try { await browser.close(); } catch(e){}
   browser=null; page=null;

@@ -24,7 +24,7 @@ import genie_policy as policy
 
 POLICY_APPROVED = False
 
-GENIE_VERSION = "2.3.0"
+GENIE_VERSION = "2.3.1"
 
 MAX_TOOL_ROUNDS = 32
 MAX_OUTPUT = 12000
@@ -1875,12 +1875,20 @@ def interactive():
                 parts = task.split(None, 2)
                 action = parts[1].lower() if len(parts) > 1 else "status"
                 try:
-                    from puter_bridge import status as puter_status, login as puter_login, free_models
+                    from puter_bridge import status as puter_status, login as puter_login, free_models, verify as puter_verify
                     if action == "status":
                         print(json.dumps(puter_status(), indent=2))
                     elif action == "login":
                         print("Opening Puter sign-in in the persistent browser profile...")
-                        print(json.dumps(puter_login(), indent=2))
+                        try:
+                            result = puter_login()
+                            print(json.dumps(result, indent=2))
+                            print("Verifying live Puter brain catalog...")
+                            print(json.dumps(puter_verify(force=True), indent=2))
+                        except Exception as exc:
+                            print(f"Puter login: {exc}")
+                    elif action == "verify":
+                        print(json.dumps(puter_verify(force=True), indent=2))
                     elif action == "models":
                         models = free_models()
                         filt = parts[2].lower() if len(parts) > 2 else ""
@@ -1889,7 +1897,7 @@ def interactive():
                             print(f"{m.get('id')} | {m.get('name','')} | provider={m.get('provider','')}")
                         print(f"FREE MODELS: {len(shown)}")
                     else:
-                        print("Usage: /puter status | /puter login | /puter models [filter]")
+                        print("Usage: /puter status | /puter login | /puter verify | /puter models [filter]")
                 except Exception as exc:
                     print(f"Puter bridge: {exc}")
                 print()
@@ -2011,12 +2019,21 @@ def main():
             parts = task.split(None, 2)
             action = parts[1].lower() if len(parts) > 1 else "status"
             try:
-                from puter_bridge import status as puter_status, login as puter_login, free_models
+                from puter_bridge import status as puter_status, login as puter_login, free_models, verify as puter_verify
                 if action == "status":
                     print(json.dumps(puter_status(), indent=2))
                 elif action == "login":
                     print("Opening Puter sign-in in the persistent browser profile...")
-                    print(json.dumps(puter_login(), indent=2))
+                    try:
+                        result = puter_login()
+                        print(json.dumps(result, indent=2))
+                        print("Verifying live Puter brain catalog...")
+                        print(json.dumps(puter_verify(force=True), indent=2))
+                    except Exception as exc:
+                        print(f"Puter login: {exc}")
+                elif action == "verify":
+                    report = puter_verify(force=True)
+                    print(json.dumps(report, indent=2))
                 elif action == "models":
                     models = free_models()
                     filt = parts[2].lower() if len(parts) > 2 else ""
@@ -2025,7 +2042,7 @@ def main():
                         print(f"{m.get('id')} | {m.get('name','')} | provider={m.get('provider','')}")
                     print(f"FREE MODELS: {len(shown)}")
                 else:
-                    print("Usage: genie puter status | genie puter login | genie puter models [filter]")
+                    print("Usage: genie puter status | genie puter login | genie puter verify | genie puter models [filter]")
             except Exception as exc:
                 print(f"Puter bridge: {exc}")
             return
