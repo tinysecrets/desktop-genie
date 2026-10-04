@@ -114,6 +114,19 @@ class GenieRegression(unittest.TestCase):
         self.assertIn("normalize: true", bridge)
         self.assertIn("class PuterBridgeError", bridge)
 
+    def test_single_coherent_mascot_theme(self):
+        s = self.read("genie_app.py")
+        # Mascot-driven palette: tail teal, hair magenta, lamp gold.
+        self.assertIn('MAGENTA = "#E452C6"', s)
+        self.assertIn('TEAL = "#3BE8D2"', s)
+        self.assertIn('GOLD = "#D4AF37"', s)
+        # The mascot is drawn as a clean circular medallion.
+        self.assertIn("def _medallion", s)
+        # The competing legacy gold-only look was removed.
+        self.assertNotIn("def build_sidebar", s)
+        self.assertNotIn("def build_center", s)
+        self.assertNotIn("def build_activity", s)
+
     def test_puter_login_is_robust(self):
         bridge = self.read("puter_bridge.py")
         # Closed auth window must fail fast with a stable code.

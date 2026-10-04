@@ -19,7 +19,7 @@ from contextlib import redirect_stdout
 from io import BytesIO, StringIO
 
 import requests
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 GENIE_DIR = Path.home() / ".config" / "genie"
 STATE_DIR = GENIE_DIR / "state"
@@ -32,25 +32,28 @@ import genie
 MAX_HISTORY = 30
 CONTEXT_TURNS = 12
 
-# Desktop GENIE follows the visual language of the user's web GENIE:
-# midnight black, rich gold, warm cream, editorial serif + clean sans.
-INK = "#0B0B0E"
-INK_DEEP = "#050507"
-SURFACE = "#141417"
-SURFACE_2 = "#1C1C20"
-SURFACE_WARM = "#1F1A12"
-BORDER = "#2A2420"
-BORDER_BRIGHT = "#3A3220"
+# Desktop GENIE wears the Wah-Lah Genie's own colors:
+# deep black stage, lamp gold, tail teal, hair magenta, sticker cream.
+INK = "#07060B"
+INK_DEEP = "#040308"
+SURFACE = "#100D17"
+SURFACE_2 = "#171221"
+SURFACE_WARM = "#221427"
+BORDER = "#2A2136"
+BORDER_BRIGHT = "#45305A"
 GOLD = "#D4AF37"
 GOLD_BRIGHT = "#F0CB58"
 GOLD_PALE = "#F5E9C8"
 GOLD_DEEP = "#8A7642"
 GOLD_MUTE = "#5A4A28"
-TEAL = "#31E6D2"
+TEAL = "#3BE8D2"
 TEAL_DEEP = "#0B6E68"
+MAGENTA = "#E452C6"
+MAGENTA_BRIGHT = "#FF7ADF"
+MAGENTA_DEEP = "#571F4C"
 CREAM = "#F5E9C8"
-CREAM_DIM = "#C5B689"
-MUTED = "#9A8868"
+CREAM_DIM = "#C9B896"
+MUTED = "#9A8BA8"
 WHITE = "#FFFFFF"
 DANGER = "#E5715E"
 
@@ -93,18 +96,20 @@ class GenieApp:
 
     def build_ui(self):
         """Visual-only premium redesign. Engine, actions, policy, and data flow stay unchanged."""
-        self.ui_bg="#05060A"; self.ui_panel="#0B0E17"; self.ui_panel2="#111625"; self.ui_panel3="#182033"
-        self.ui_line="#273149"; self.ui_text="#F7FAFF"; self.ui_dim="#91A0B8"; self.ui_violet="#8D6BFF"
-        self.ui_violet2="#BCA9FF"; self.ui_mint="#54F1D0"; self.ui_gold="#FFD66B"; self.ui_blue="#5BB8FF"
-        self.root.title("GENIE — Personal Intelligence"); self.root.geometry("1520x920"); self.root.minsize(1180,760); self.root.configure(bg=self.ui_bg)
+        # Wah-Lah Genie palette: deep-black stage, lamp gold, tail teal,
+        # hair magenta. Primary action = magenta; live/online = teal.
+        self.ui_bg="#05040A"; self.ui_panel="#0D0A14"; self.ui_panel2="#141019"; self.ui_panel3="#1D1626"
+        self.ui_line="#2B2138"; self.ui_text="#F7FAFF"; self.ui_dim="#A08FB5"; self.ui_violet=MAGENTA
+        self.ui_violet2=MAGENTA_BRIGHT; self.ui_mint=TEAL; self.ui_gold="#FFD66B"; self.ui_blue="#8D6BFF"
+        self.root.title("GENIE — Wah-Lah, It's Done"); self.root.geometry("1520x920"); self.root.minsize(1180,760); self.root.configure(bg=self.ui_bg)
         self.scene=Canvas(self.root,bg=self.ui_bg,highlightthickness=0,bd=0); self.scene.pack(fill=BOTH,expand=True)
         self.scene.bind("<Configure>",lambda _e:self.draw_scene())
 
         self.header=Frame(self.scene,bg=self.ui_bg); self.header.place(relx=.035,rely=.025,relwidth=.93,height=58)
         Label(self.header,text="GENIE",bg=self.ui_bg,fg=self.ui_text,font=("Noto Serif",30,"bold")).pack(side=LEFT)
-        Label(self.header,text="PERSONAL INTELLIGENCE",bg=self.ui_bg,fg=self.ui_violet2,font=("Noto Sans",10,"bold")).pack(side=LEFT,padx=(18,0),pady=(9,0))
+        Label(self.header,text="WAH-LAH GENIE  ·  PERSONAL INTELLIGENCE",bg=self.ui_bg,fg=self.ui_violet2,font=("Noto Sans",10,"bold")).pack(side=LEFT,padx=(18,0),pady=(9,0))
         self.clock_label=Label(self.header,text=datetime.now().strftime("%I:%M:%S %p  ·  %a, %b %d"),bg=self.ui_bg,fg=self.ui_gold,font=("DejaVu Sans Mono",11,"bold")); self.clock_label.pack(side=RIGHT,padx=(0,18),pady=8)
-        self.live_badge=Label(self.header,text="●  ONLINE  ·  GUARDED",bg="#10182A",fg=self.ui_mint,padx=14,pady=7,font=("Noto Sans",9,"bold")); self.live_badge.pack(side=RIGHT,pady=6)
+        self.live_badge=Label(self.header,text="●  ONLINE  ·  GUARDED",bg="#0E1B1E",fg=self.ui_mint,padx=14,pady=7,font=("Noto Sans",9,"bold")); self.live_badge.pack(side=RIGHT,pady=6)
 
         self.sidebar=Frame(self.scene,bg=self.ui_panel,highlightthickness=1,highlightbackground=self.ui_line); self.sidebar.place(relx=.035,rely=.105,relwidth=.18,relheight=.855)
         Label(self.sidebar,text="WISH SHELF",bg=self.ui_panel,fg=self.ui_dim,font=("Noto Sans",8,"bold")).pack(anchor="w",padx=18,pady=(20,9))
@@ -116,11 +121,11 @@ class GenieApp:
         wish("◉  Open browser","Open my browser and get it ready for me.",self.ui_blue)
         wish("▣  Check devices","Check my connected computers and Android devices and report their status.",self.ui_mint)
         Label(self.sidebar,text="CONTROL",bg=self.ui_panel,fg=self.ui_dim,font=("Noto Sans",8,"bold")).pack(anchor="w",padx=18,pady=(24,8))
-        Button(self.sidebar,text="✦  GENIE MODE",command=self.open_genie_mode,bg="#17142A",fg=self.ui_violet2,activebackground="#211B3C",activeforeground=self.ui_text,relief="flat",bd=0,padx=13,pady=10,anchor="w",cursor="hand2",font=("Noto Sans",9,"bold")).pack(fill=X,padx=10,pady=3)
+        Button(self.sidebar,text="✦  GENIE MODE",command=self.open_genie_mode,bg="#241426",fg=self.ui_violet2,activebackground="#331B36",activeforeground=self.ui_text,relief="flat",bd=0,padx=13,pady=10,anchor="w",cursor="hand2",font=("Noto Sans",9,"bold")).pack(fill=X,padx=10,pady=3)
         Button(self.sidebar,text="◌  TALK TO GENIE",command=self.quick_talk,bg=self.ui_panel2,fg=self.ui_text,activebackground=self.ui_panel3,activeforeground=self.ui_mint,relief="flat",bd=0,padx=13,pady=10,anchor="w",cursor="hand2",font=("Noto Sans",9,"bold")).pack(fill=X,padx=10,pady=3)
         Button(self.sidebar,text="▤  SEE MY SCREEN",command=self.see_screen,bg=self.ui_panel2,fg=self.ui_text,activebackground=self.ui_panel3,activeforeground=self.ui_blue,relief="flat",bd=0,padx=13,pady=10,anchor="w",cursor="hand2",font=("Noto Sans",9,"bold")).pack(fill=X,padx=10,pady=3)
         Button(self.sidebar,text="◈  LIVE WORKSPACE",command=self.watch_genie,bg="#102B2C",fg=self.ui_mint,activebackground="#174544",activeforeground=self.ui_text,relief="flat",bd=0,padx=13,pady=10,anchor="w",cursor="hand2",font=("Noto Sans",9,"bold")).pack(fill=X,padx=10,pady=(8,3))
-        self.context_button=Button(self.sidebar,text="CONTEXT  ·  ON",command=self.toggle_context,bg="#080B12",fg=self.ui_mint,activebackground="#0D1320",activeforeground=self.ui_mint,relief="flat",bd=0,padx=13,pady=9,anchor="w",cursor="hand2",font=("Noto Sans",8,"bold")); self.context_button.pack(fill=X,padx=10,pady=(22,3))
+        self.context_button=Button(self.sidebar,text="CONTEXT  ·  ON",command=self.toggle_context,bg="#0A0812",fg=self.ui_mint,activebackground="#150F1E",activeforeground=self.ui_mint,relief="flat",bd=0,padx=13,pady=9,anchor="w",cursor="hand2",font=("Noto Sans",8,"bold")); self.context_button.pack(fill=X,padx=10,pady=(22,3))
         self.status_side=Label(self.sidebar,text="GENIE\n\nPreparing system pulse…",bg=self.ui_panel,fg=self.ui_dim,justify=LEFT,anchor="nw",padx=18,pady=12,font=("DejaVu Sans Mono",8)); self.status_side.pack(fill=X,padx=10,pady=(10,0))
 
         self.center=Frame(self.scene,bg=self.ui_bg); self.center.place(relx=.235,rely=.105,relwidth=.51,relheight=.855)
@@ -129,8 +134,8 @@ class GenieApp:
         Label(self.hero,text="Your command.\nGENIE's action.",bg=self.ui_panel,fg=self.ui_text,justify=LEFT,font=("Noto Serif",32,"bold")).pack(anchor="w",padx=22)
         self.orb=Canvas(self.hero,width=500,height=255,bg=self.ui_panel,highlightthickness=0,bd=0); self.orb.pack(fill=X,padx=2,pady=(0,2))
 
-        self.composer=Frame(self.center,bg=self.ui_panel2,highlightthickness=1,highlightbackground="#34415D"); self.composer.pack(fill=X,pady=(10,9))
-        self.input=Text(self.composer,height=3,wrap="word",bg=self.ui_panel2,fg=self.ui_text,insertbackground=self.ui_violet2,selectbackground="#3B315E",relief="flat",bd=0,padx=16,pady=13,font=("Noto Sans",13)); self.input.pack(side=LEFT,fill=BOTH,expand=True,padx=(5,0),pady=5); self.input.bind("<Control-Return>",self.send_event)
+        self.composer=Frame(self.center,bg=self.ui_panel2,highlightthickness=1,highlightbackground=BORDER_BRIGHT); self.composer.pack(fill=X,pady=(10,9))
+        self.input=Text(self.composer,height=3,wrap="word",bg=self.ui_panel2,fg=self.ui_text,insertbackground=self.ui_violet2,selectbackground="#46263E",relief="flat",bd=0,padx=16,pady=13,font=("Noto Sans",13)); self.input.pack(side=LEFT,fill=BOTH,expand=True,padx=(5,0),pady=5); self.input.bind("<Control-Return>",self.send_event)
         self.send_button=Button(self.composer,text="SEND  →",command=self.send_or_stop,bg=self.ui_violet,fg="#090711",activebackground=self.ui_violet2,activeforeground="#090711",relief="flat",bd=0,padx=18,pady=12,font=("Noto Sans",9,"bold"),cursor="hand2"); self.send_button.pack(side=RIGHT,padx=9,pady=9)
         self.bottom=Frame(self.center,bg=self.ui_bg); self.bottom.pack(fill=X)
         self.status_label=Label(self.bottom,textvariable=self.status,bg=self.ui_bg,fg=self.ui_mint,font=("Noto Sans",9,"bold")); self.status_label.pack(side=LEFT,padx=3,pady=4)
@@ -138,35 +143,50 @@ class GenieApp:
         Button(self.bottom,text="COPY LAST",command=self.copy_last_answer,bg=self.ui_panel2,fg=self.ui_dim,activebackground=self.ui_panel3,activeforeground=self.ui_text,relief="flat",bd=0,padx=10,pady=4,font=("Noto Sans",8,"bold"),cursor="hand2").pack(side=RIGHT,padx=3,pady=2)
         Button(self.bottom,text="EXPORT CHAT",command=self.export_chat,bg=self.ui_panel2,fg=self.ui_dim,activebackground=self.ui_panel3,activeforeground=self.ui_text,relief="flat",bd=0,padx=10,pady=4,font=("Noto Sans",8,"bold"),cursor="hand2").pack(side=RIGHT,padx=3,pady=2)
         self.chat_frame=Frame(self.center,bg=self.ui_panel,highlightthickness=1,highlightbackground=self.ui_line); self.chat_frame.pack(fill=BOTH,expand=True); self.chat_frame.rowconfigure(0,weight=1); self.chat_frame.columnconfigure(0,weight=1)
-        self.chat=Text(self.chat_frame,wrap="word",state="disabled",bg=self.ui_panel,fg=self.ui_text,insertbackground=self.ui_violet2,selectbackground="#3B315E",relief="flat",bd=0,padx=20,pady=16,font=("Noto Sans",12),spacing3=9)
-        self.scroll=Scrollbar(self.chat_frame,command=self.chat.yview,bg="#3C315F",troughcolor=self.ui_panel,activebackground=self.ui_violet2,width=7); self.chat.configure(yscrollcommand=self.scroll.set); self.chat.grid(row=0,column=0,sticky="nsew"); self.scroll.grid(row=0,column=1,sticky="ns")
+        self.chat=Text(self.chat_frame,wrap="word",state="disabled",bg=self.ui_panel,fg=self.ui_text,insertbackground=self.ui_violet2,selectbackground="#46263E",relief="flat",bd=0,padx=20,pady=16,font=("Noto Sans",12),spacing3=9)
+        self.scroll=Scrollbar(self.chat_frame,command=self.chat.yview,bg="#3A2440",troughcolor=self.ui_panel,activebackground=self.ui_violet2,width=7); self.chat.configure(yscrollcommand=self.scroll.set); self.chat.grid(row=0,column=0,sticky="nsew"); self.scroll.grid(row=0,column=1,sticky="ns")
 
         self.activity=Frame(self.scene,bg=self.ui_panel,highlightthickness=1,highlightbackground=self.ui_line); self.activity.place(relx=.765,rely=.105,relwidth=.20,relheight=.855)
         Label(self.activity,text="SYSTEM PULSE",bg=self.ui_panel,fg=self.ui_text,font=("Noto Serif",14,"bold")).pack(anchor="w",padx=18,pady=(20,2))
         Label(self.activity,text="LIVE · LOCAL · GUARDED",bg=self.ui_panel,fg=self.ui_mint,font=("Noto Sans",9,"bold")).pack(anchor="w",padx=18,pady=(0,14))
         self.system_lines=[]
         for title,value,accent in [("GENIE CORE","READY",self.ui_mint),("DESKTOP","GUARDED",self.ui_gold),("TOOLS","loading",self.ui_blue),("ROUTER","AUTO",self.ui_violet2)]:
-            card=Frame(self.activity,bg=self.ui_panel2,highlightthickness=1,highlightbackground="#202A40"); card.pack(fill=X,padx=10,pady=4)
+            card=Frame(self.activity,bg=self.ui_panel2,highlightthickness=1,highlightbackground="#241A30"); card.pack(fill=X,padx=10,pady=4)
             Label(card,text=title,bg=self.ui_panel2,fg=self.ui_dim,font=("Noto Sans",7,"bold")).pack(anchor="w",padx=11,pady=(9,1))
             val=Label(card,text=value,bg=self.ui_panel2,fg=accent,font=("Noto Sans",10,"bold")); val.pack(anchor="w",padx=11,pady=(0,9)); self.system_lines.append(val)
         Label(self.activity,text="ACTIVITY STREAM",bg=self.ui_panel,fg=self.ui_violet2,font=("Noto Sans",8,"bold")).pack(anchor="w",padx=18,pady=(20,8))
-        self.activity_box=Text(self.activity,height=12,wrap="word",state="disabled",bg="#070A10",fg=self.ui_dim,relief="flat",bd=0,padx=11,pady=11,font=("DejaVu Sans Mono",8)); self.activity_box.pack(fill=BOTH,expand=True,padx=10,pady=(0,10))
+        self.activity_box=Text(self.activity,height=12,wrap="word",state="disabled",bg="#07060C",fg=self.ui_dim,relief="flat",bd=0,padx=11,pady=11,font=("DejaVu Sans Mono",8)); self.activity_box.pack(fill=BOTH,expand=True,padx=10,pady=(0,10))
+
+    def _medallion(self, size):
+        """The Wah-Lah Genie as a clean circular medallion.
+
+        The shipped sticker PNG carries a black backdrop plus baked-in
+        checkerboard specks; a circular alpha mask crops both away so the
+        mascot reads as an intentional roundel on any surface.
+        """
+        img=Image.open(GENIE_DIR / "wah-lah-genie.png").convert("RGBA")
+        img.thumbnail((size,size), Image.Resampling.LANCZOS)
+        mask=Image.new("L", img.size, 0)
+        ImageDraw.ellipse((0,0,img.width-1,img.height-1), fill=255)
+        img.putalpha(mask)
+        return ImageTk.PhotoImage(img)
 
     def draw_scene(self):
         if not hasattr(self,"scene"): return
         w=max(self.scene.winfo_width(),1000); h=max(self.scene.winfo_height(),700); self.scene.delete("bg")
         for i in range(12):
             inset=i*32
-            self.scene.create_oval(w*.26-inset,h*.05-inset*.15,w*.74+inset,h*.95+inset*.12,outline=("#0A0E18" if i%2 else "#080C14"),width=1,tags="bg")
-        self.scene.create_oval(w*.44,-h*.20,w*.78,h*.28,fill="#090A18",outline="",tags="bg")
+            self.scene.create_oval(w*.26-inset,h*.05-inset*.15,w*.74+inset,h*.95+inset*.12,outline=("#0E0A18" if i%2 else "#0A0812"),width=1,tags="bg")
+        self.scene.create_oval(w*.44,-h*.20,w*.78,h*.28,fill="#120A18",outline="",tags="bg")
         self.scene.create_oval(w*.08,h*.72,w*.42,h*1.12,fill="#07131A",outline="",tags="bg")
-        self.scene.create_line(w*.035,h*.095,w*.965,h*.095,fill="#171D2A",width=1,tags="bg")
+        self.scene.create_line(w*.035,h*.095,w*.965,h*.095,fill="#241A30",width=1,tags="bg")
         try:
             if not hasattr(self,"wah_lah_bg_photo"):
-                img=Image.open(GENIE_DIR / "wah-lah-genie.png").convert("RGBA")
-                img.thumbnail((520,520), Image.Resampling.LANCZOS)
-                self.wah_lah_bg_photo=ImageTk.PhotoImage(img)
-            self.scene.create_image(w*.87,h*.58,image=self.wah_lah_bg_photo,anchor="center",tags="bg")
+                self.wah_lah_bg_photo=self._medallion(520)
+            r=262
+            self.scene.create_oval(w*.87-r,h*.60-r,w*.87+r,h*.60+r,outline=GOLD_DEEP,width=2,tags="bg")
+            self.scene.create_oval(w*.87-r-6,h*.60-r-6,w*.87+r+6,h*.60+r+6,outline=MAGENTA_DEEP,width=1,tags="bg")
+            self.scene.create_image(w*.87,h*.60,image=self.wah_lah_bg_photo,anchor="center",tags="bg")
         except Exception:
             pass
         self.scene.tag_lower("bg")
@@ -178,240 +198,16 @@ class GenieApp:
         w=max(self.orb.winfo_width(),500); h=max(self.orb.winfo_height(),255)
         try:
             if not hasattr(self, "wah_lah_genie_photo"):
-                asset=GENIE_DIR / "wah-lah-genie.png"
-                img=Image.open(asset).convert("RGBA")
-                img.thumbnail((330, 330), Image.Resampling.LANCZOS)
-                self.wah_lah_genie_photo=ImageTk.PhotoImage(img)
+                self.wah_lah_genie_photo=self._medallion(300)
             x=w*.50; y=h*.47
-            self.orb.create_oval(x-145,y-112,x+145,y+112,fill="#0D0B15",outline="#33294A",width=1)
-            self.orb.create_oval(x-130,y-98,x+130,y+98,fill="#15101D",outline="#6B3D70",width=1)
+            self.orb.create_oval(x-145,y-112,x+145,y+112,fill="#0D0B15",outline=GOLD_DEEP,width=2)
+            self.orb.create_oval(x-130,y-98,x+130,y+98,fill="#15101D",outline=MAGENTA_DEEP,width=1)
             self.orb.create_image(x,y,image=self.wah_lah_genie_photo,anchor="center")
             self.orb.create_text(x,h-10,text="WAH-LAH GENIE  •  READY TO MAKE IT HAPPEN",fill=self.ui_gold,font=("Noto Sans",8,"bold"))
         except Exception:
             self.orb.create_text(w*.5,h*.45,text="GENIE",fill=self.ui_gold,font=("Noto Sans",26,"bold"))
             self.orb.create_text(w*.5,h*.65,text="READY",fill=self.ui_mint,font=("Noto Sans",9,"bold"))
 
-    def build_sidebar(self):
-        self.sidebar = Frame(self.main, bg=SURFACE, bd=0,
-                             highlightthickness=1, highlightbackground=BORDER)
-        self.sidebar.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
-        self.sidebar.configure(width=220)
-        self.sidebar.pack_propagate(False)
-
-        Label(
-            self.sidebar, text="GENIE", bg=SURFACE, fg=CREAM,
-            font=FONT_HEAD_SMALL
-        ).pack(anchor="w", padx=18, pady=(18, 2))
-        Label(
-            self.sidebar, text="THE MAGIC IS IN THE ACTION", bg=SURFACE,
-            fg=MUTED, font=FONT_BODY_BOLD
-        ).pack(anchor="w", padx=18, pady=(0, 18))
-
-        self.new_button = Button(
-            self.sidebar, text="✦  New Wish", command=self.new_chat,
-            bg=GOLD, fg=INK, activebackground=GOLD_BRIGHT,
-            activeforeground=INK, relief="flat", bd=0, padx=12, pady=10,
-            font=FONT_BODY_BOLD, cursor="hand2"
-        )
-        self.new_button.pack(fill=X, padx=14, pady=(0, 16))
-
-        Label(
-            self.sidebar, text="QUICK WISHES", bg=SURFACE, fg=GOLD_BRIGHT,
-            font=FONT_BODY_BOLD
-        ).pack(anchor="w", padx=18, pady=(0, 8))
-
-        actions = [
-            ("⚡  Check my computer", "Check my computer health and tell me what needs attention."),
-            ("🧰  Fix something", "Inspect my computer for obvious problems and fix what is safe to fix."),
-            ("🌐  Open browser", "Open my browser and get it ready for me."),
-            ("📱  Check devices", "Check my connected computers and Android devices and report their status."),
-        ]
-        for label, prompt in actions:
-            Button(
-                self.sidebar, text=label, command=lambda p=prompt: self.use_prompt(p),
-                bg=SURFACE_2, fg=CREAM, activebackground=SURFACE_WARM,
-                activeforeground=GOLD_BRIGHT, relief="flat", bd=0,
-                padx=10, pady=9, anchor="w", cursor="hand2",
-                font=FONT_BODY_BOLD
-            ).pack(fill=X, padx=10, pady=3)
-
-        Label(self.sidebar, text="GENIE MODE", bg=SURFACE, fg=TEAL,
-              font=FONT_BODY_BOLD).pack(anchor="w", padx=18, pady=(22, 7))
-        Button(self.sidebar, text="GENIE MODE", command=self.open_genie_mode,
-               bg=GOLD_MUTE, fg=GOLD_PALE, activebackground=GOLD_DEEP,
-               activeforeground=WHITE, relief="flat", bd=0, padx=10, pady=9,
-               anchor="w", cursor="hand2", font=FONT_BODY_BOLD).pack(fill=X, padx=10, pady=3)
-        Button(self.sidebar, text="TALK TO GENIE", command=self.quick_talk,
-               bg=SURFACE_2, fg=CREAM, activebackground=SURFACE_WARM,
-               activeforeground=GOLD_BRIGHT, relief="flat", bd=0, padx=10, pady=9,
-               anchor="w", cursor="hand2", font=FONT_BODY_BOLD).pack(fill=X, padx=10, pady=3)
-        Button(self.sidebar, text="SEE MY SCREEN", command=self.see_screen,
-               bg=SURFACE_2, fg=CREAM, activebackground=SURFACE_WARM,
-               activeforeground=GOLD_BRIGHT, relief="flat", bd=0, padx=10, pady=9,
-               anchor="w", cursor="hand2", font=FONT_BODY_BOLD).pack(fill=X, padx=10, pady=3)
-
-        Button(self.sidebar, text="LIVE WORKSPACE", command=self.watch_genie,
-               bg=TEAL_DEEP, fg=CREAM, activebackground=TEAL,
-               activeforeground=INK, relief="flat", bd=0, padx=10, pady=9,
-               anchor="w", cursor="hand2", font=FONT_BODY_BOLD).pack(fill=X, padx=10, pady=(8, 3))
-
-        Label(
-            self.sidebar, text="SESSION", bg=SURFACE, fg=MUTED,
-            font=FONT_BODY_BOLD
-        ).pack(anchor="w", padx=18, pady=(22, 7))
-
-        self.context_button = Button(
-            self.sidebar, text="Context: ON", command=self.toggle_context,
-            bg=INK, fg=CREAM_DIM, activebackground=INK,
-            activeforeground=WHITE, relief="flat", bd=0,
-            padx=10, pady=8, anchor="w", cursor="hand2",
-            font=FONT_BODY_BOLD
-        )
-        self.context_button.pack(fill=X, padx=10, pady=3)
-
-        self.status_side = Label(
-            self.sidebar, text="", bg=SURFACE, fg=MUTED,
-            justify=LEFT, anchor="nw", padx=18, pady=12,
-            font=FONT_MONO
-        )
-        self.status_side.pack(fill=X, padx=10, pady=(18, 0))
-
-    def build_center(self):
-        self.center = Frame(self.main, bg=INK, bd=0)
-        self.center.grid(row=0, column=1, sticky="nsew")
-        self.center.rowconfigure(1, weight=1)
-        self.center.columnconfigure(0, weight=1)
-
-        self.hero = Frame(
-            self.center, bg=INK_DEEP, bd=0,
-            highlightthickness=1, highlightbackground=BORDER_BRIGHT
-        )
-        self.hero.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        self.hero.columnconfigure(1, weight=1)
-
-        self.orb = Canvas(
-            self.hero, width=190, height=170, bg=INK_DEEP,
-            highlightthickness=0, bd=0
-        )
-        self.orb.grid(row=0, column=0, rowspan=2, padx=(8, 0), pady=8)
-
-        Label(
-            self.hero, text="Welcome to your GENIE.", bg=INK_DEEP,
-            fg=CREAM, font=("Noto Serif", 26, "bold")
-        ).grid(row=0, column=1, sticky="sw", padx=(4, 20), pady=(34, 0))
-        Label(
-            self.hero,
-            text="Think it. Say it. Wish it. GENIE handles the work.",
-            bg=INK_DEEP, fg=CREAM_DIM, font=FONT_AI
-        ).grid(row=1, column=1, sticky="nw", padx=(4, 20), pady=(2, 28))
-
-        self.chat_frame = Frame(
-            self.center, bg=SURFACE, bd=0,
-            highlightthickness=1, highlightbackground=BORDER
-        )
-        self.chat_frame.grid(row=1, column=0, sticky="nsew")
-        self.chat_frame.rowconfigure(0, weight=1)
-        self.chat_frame.columnconfigure(0, weight=1)
-
-        self.chat = Text(
-            self.chat_frame, wrap="word", state="disabled",
-            bg=SURFACE, fg=CREAM, insertbackground=GOLD_BRIGHT,
-            selectbackground=GOLD_MUTE, relief="flat", bd=0,
-            padx=22, pady=18, font=FONT_BODY, spacing3=5
-        )
-        self.scroll = Scrollbar(
-            self.chat_frame, command=self.chat.yview,
-            bg=GOLD_MUTE, troughcolor=INK, activebackground=GOLD,
-            width=10
-        )
-        self.chat.configure(yscrollcommand=self.scroll.set)
-        self.chat.grid(row=0, column=0, sticky="nsew")
-        self.scroll.grid(row=0, column=1, sticky="ns")
-
-        self.composer = Frame(
-            self.center, bg=INK_DEEP, bd=0,
-            highlightthickness=1, highlightbackground=BORDER_BRIGHT
-        )
-        self.composer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        self.composer.columnconfigure(0, weight=1)
-
-        self.input = Text(
-            self.composer, height=3, wrap="word",
-            bg=INK_DEEP, fg=CREAM, insertbackground=GOLD_BRIGHT,
-            selectbackground=GOLD_MUTE, relief="flat", bd=0,
-            padx=14, pady=11, font=FONT_BODY
-        )
-        self.input.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
-        self.input.bind("<Control-Return>", self.send_event)
-
-        self.send_button = Button(
-            self.composer, text="✦  SEND WISH", command=self.send,
-            bg=GOLD, fg=INK, activebackground=GOLD_BRIGHT,
-            activeforeground=INK, relief="flat", bd=0, padx=18, pady=12,
-            font=FONT_BODY_BOLD, cursor="hand2"
-        )
-        self.send_button.grid(row=0, column=1, padx=8, pady=8)
-
-        self.bottom = Frame(self.center, bg=INK, bd=0)
-        self.bottom.grid(row=3, column=0, sticky="ew")
-        self.status_label = Label(
-            self.bottom, textvariable=self.status, bg=INK, fg=GOLD_BRIGHT,
-            font=FONT_BODY_BOLD
-        )
-        self.status_label.pack(side=LEFT, padx=4, pady=8)
-        Label(
-            self.bottom, text="Ctrl+Enter to send", bg=INK, fg=MUTED,
-            font=FONT_BODY
-        ).pack(side=RIGHT, padx=4, pady=8)
-
-    def build_activity(self):
-        self.activity = Frame(
-            self.main, bg=SURFACE, bd=0,
-            highlightthickness=1, highlightbackground=BORDER
-        )
-        self.activity.grid(row=0, column=2, sticky="nse", padx=(10, 0))
-        self.activity.configure(width=235)
-        self.activity.pack_propagate(False)
-
-        Label(
-            self.activity, text="LIVE SYSTEMS", bg=SURFACE, fg=GOLD_BRIGHT,
-            font=FONT_BODY_BOLD
-        ).pack(anchor="w", padx=16, pady=(18, 10))
-
-        self.system_lines = []
-        for title, value in [
-            ("GENIE ENGINE", "READY"),
-            ("COMMANDER", "AUTO"),
-            ("TOOLS", "loading"),
-            ("MODEL ROUTER", "AUTO"),
-        ]:
-            card = Frame(
-                self.activity, bg=SURFACE_2, bd=0,
-                highlightthickness=1, highlightbackground=BORDER
-            )
-            card.pack(fill=X, padx=10, pady=4)
-            Label(
-                card, text=title, bg=SURFACE_2, fg=MUTED,
-                font=FONT_BODY_BOLD, anchor="w"
-            ).pack(fill=X, padx=10, pady=(8, 1))
-            val = Label(
-                card, text=value, bg=SURFACE_2, fg=CREAM,
-                font=FONT_BODY_BOLD, anchor="w"
-            )
-            val.pack(fill=X, padx=10, pady=(0, 8))
-            self.system_lines.append(val)
-
-        Label(
-            self.activity, text="ACTIVITY", bg=SURFACE, fg=TEAL,
-            font=FONT_BODY_BOLD
-        ).pack(anchor="w", padx=16, pady=(20, 7))
-
-        self.activity_box = Text(
-            self.activity, height=11, wrap="word", state="disabled",
-            bg=INK_DEEP, fg=CREAM_DIM, relief="flat", bd=0,
-            padx=10, pady=10, font=FONT_MONO
-        )
-        self.activity_box.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
 
     def load_history(self):
         try:
@@ -633,7 +429,7 @@ class GenieApp:
             activebackground="#B05343", activeforeground=WHITE
         )
         self.status.set("GENIE is working your wish…")
-        self.live_badge.configure(text="◉  GENIE WORKING", bg=GOLD_MUTE)
+        self.live_badge.configure(text="◉  GENIE WORKING", bg=MAGENTA_DEEP)
         self.append_activity("GENIE started")
 
         threading.Thread(
@@ -711,7 +507,7 @@ class GenieApp:
             state="normal", text="SEND  →", bg=self.ui_violet,
             activebackground=self.ui_violet2, activeforeground="#090711"
         )
-        self.live_badge.configure(text="●  GENIE ONLINE", bg="#10182A")
+        self.live_badge.configure(text="●  GENIE ONLINE", bg="#0E1B1E")
         if error == "CANCELLED":
             self.append_message(
                 "assistant",
@@ -1356,7 +1152,7 @@ class GenieApp:
             orb.delete("all")
             cx,cy=130,115
             pulse=1+0.07*math.sin(self.phase)
-            for radius,color in ((74,GOLD_MUTE),(61,GOLD_DEEP),(49,GOLD),(37,GOLD_BRIGHT)):
+            for radius,color in ((74,MAGENTA_DEEP),(61,MAGENTA),(49,TEAL_DEEP),(37,TEAL)):
                 rr=radius*pulse
                 orb.create_oval(cx-rr,cy-rr,cx+rr,cy+rr,outline=color,width=2)
             orb.create_oval(cx-22,cy-22,cx+22,cy+22,fill=GOLD_BRIGHT,outline=CREAM,width=2)

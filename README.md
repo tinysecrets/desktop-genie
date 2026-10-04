@@ -75,6 +75,15 @@ Bridge behavior:
 - Session commands: `/help`, `/new` (clear memory), `/history`,
   `/save [path]` (export transcript as Markdown).
 
+## Visual language (v2.3.2)
+
+The desktop app wears the Wah-Lah Genie's own colors on a deep-black stage:
+lamp **gold** for the wordmark and premium accents, tail **teal** for live
+status, hair **magenta** for primary actions, sticker **cream** for text.
+The mascot is drawn as a clean circular medallion (a circular alpha mask
+crops the shipped sticker's black backdrop and checkerboard specks). One
+palette feeds every surface — command center, Genie Mode, Live Workspace.
+
 ## Desktop app controls
 
 - **STOP** — the send button becomes a stop control while GENIE is working;

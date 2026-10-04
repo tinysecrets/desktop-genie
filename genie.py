@@ -24,7 +24,7 @@ import genie_policy as policy
 
 POLICY_APPROVED = False
 
-GENIE_VERSION = "2.3.1"
+GENIE_VERSION = "2.3.2"
 
 MAX_TOOL_ROUNDS = 32
 MAX_OUTPUT = 12000
