@@ -24,9 +24,27 @@ import genie_policy as policy
 
 POLICY_APPROVED = False
 
+GENIE_VERSION = "2.2.0"
+
 MAX_TOOL_ROUNDS = 32
 MAX_OUTPUT = 12000
 MAX_COMMAND_OUTPUT = 20000
+
+# Cooperative cancellation flag. Front ends (desktop app, future bridges)
+# set this to True to stop the current wish at the next safe checkpoint:
+# before each model call and before each tool execution round.
+CANCEL_REQUESTED = False
+
+
+def request_cancel():
+    """Ask the running GENIE loop to stop at its next checkpoint."""
+    global CANCEL_REQUESTED
+    CANCEL_REQUESTED = True
+
+
+def _check_cancel():
+    if CANCEL_REQUESTED:
+        raise RuntimeError("CANCELLED")
 
 SYSTEM = r"""
 You are GENIE, the user's personal assistant and autonomous computer/AI orchestrator.
@@ -694,7 +712,8 @@ def execute_tool(name, args):
         if name == "delegate_team":
             root=Path.home()/"workspace/projects/active/agent-team"
             if not root.is_dir(): return {"error":f"Agent Team missing: {root}"}
-            p=subprocess.run(["make",f"GOAL={str(args["goal"])}","genie"],cwd=str(root),capture_output=True,text=True,timeout=900)
+            goal=str(args["goal"])
+            p=subprocess.run(["make",f"GOAL={goal}","genie"],cwd=str(root),capture_output=True,text=True,timeout=900)
             return {"exit_code":p.returncode,"stdout":p.stdout[-MAX_COMMAND_OUTPUT:],"stderr":p.stderr[-MAX_COMMAND_OUTPUT:]}
 
         return {"error": f"Unknown tool: {name}"}
@@ -877,7 +896,246 @@ def call_model(model_id, messages):
     return choices[0].get("message") or {}
 
 
-def run_agent(task, preferred_model=None):
+# --------------------------------------------------------------------------
+# GENIE intelligence stack (v2.2)
+#
+#   local first, cloud muscle, automatic recovery.
+#
+# GENIE classifies the task, then walks a brain chain from the roster:
+#   simple tasks  -> local Ollama workers first, then free cloud pool
+#   complex tasks -> flagship brains (Opus / Fable / Hermes 405B via Puter),
+#                    then the OpenRouter FREE pool, then local workers
+# Nothing is picked by hand. Availability is probed live; unavailable
+# brains are skipped; a failed tier automatically escalates to the next.
+# --------------------------------------------------------------------------
+
+OLLAMA_BASE = "http://127.0.0.1:11434"
+
+COMPLEX_TERMS = [
+    "complex", "complicated", "reason", "analyze", "analyse", "debug",
+    "architecture", "design", "investigate", "diagnose", "strategy",
+    "strategic", "compare", "tradeoff", "trade-off", "refactor",
+    "security", "audit", "prove", "figure out", "root cause", "why is",
+    "plan", "hard problem", "second opinion",
+]
+
+DEFAULT_ROUTING = {
+    "policy": (
+        "auto; local-first for simple tasks; cloud escalation for complex; "
+        "free-first; no manual selection required"
+    ),
+    "chain": {
+        "simple": ["local-ollama", "hermes-14b", "openrouter-free"],
+        "complex": [
+            "opus-55", "fable-51", "hermes-405b",
+            "openrouter-free", "local-ollama",
+        ],
+    },
+}
+
+
+def classify_task(task):
+    """Decide which brain tier a task deserves. Returns 'simple'|'complex'."""
+    t = (task or "").lower()
+    hits = sum(1 for term in COMPLEX_TERMS if term in t)
+    if len((task or "").split()) > 120:
+        hits += 1
+    return "complex" if hits >= 2 else "simple"
+
+
+def load_routing():
+    """Routing config from the team file, with safe built-in defaults."""
+    try:
+        data = json.loads(TEAM.read_text())
+        routing = data.get("routing") or {}
+        chain = routing.get("chain") or {}
+        return {
+            "policy": routing.get("policy") or DEFAULT_ROUTING["policy"],
+            "chain": {
+                "simple": list(chain.get("simple") or DEFAULT_ROUTING["chain"]["simple"]),
+                "complex": list(chain.get("complex") or DEFAULT_ROUTING["chain"]["complex"]),
+            },
+        }
+    except Exception:
+        return json.loads(json.dumps(DEFAULT_ROUTING))
+
+
+def ollama_models():
+    """Models currently installed in the local Ollama runtime."""
+    try:
+        with urlopen(Request(f"{OLLAMA_BASE}/api/tags"), timeout=3) as response:
+            data = json.loads(response.read().decode())
+        return [
+            m.get("name") for m in (data.get("models") or [])
+            if m.get("name")
+        ]
+    except Exception:
+        return []
+
+
+def ollama_pick_model(requested):
+    """Resolve a concrete local model: honor the request, prefer Hermes."""
+    installed = ollama_models()
+    if not installed:
+        return None
+    if requested and requested != "auto":
+        for name in installed:
+            if name == requested or name.split(":")[0] == requested.split(":")[0]:
+                return name
+    for name in installed:
+        if "hermes" in name.lower():
+            return name
+    return installed[0]
+
+
+def provider_available(member):
+    """Live availability probe for one roster member."""
+    provider = (member.get("provider") or "").lower()
+    if provider == "puter":
+        return bool(os.environ.get("PUTER_AUTH_TOKEN", "").strip())
+    if provider == "ollama":
+        return ollama_pick_model(member.get("model")) is not None
+    if provider == "openrouter":
+        return bool(API_KEY)
+    return False
+
+
+def build_brain_chain(task):
+    """Ordered list of available brains for this task, plus its class."""
+    complexity = classify_task(task)
+    routing = load_routing()
+    handles = routing["chain"].get(complexity) or []
+    roster = {m.get("handle"): m for m in load_ai_team()}
+    chain = []
+    for handle in handles:
+        member = roster.get(handle)
+        if not member:
+            continue
+        provider = (member.get("provider") or "").lower()
+        if provider not in ("ollama", "puter", "openrouter"):
+            continue
+        chain.append(member)
+    return chain, complexity
+
+
+def call_ollama(member, messages):
+    """Chat with the local Ollama runtime using GENIE's full toolset."""
+    model = ollama_pick_model(member.get("model"))
+    if not model:
+        raise RuntimeError("No local Ollama model installed.")
+    body = {
+        "model": model,
+        "messages": messages,
+        "tools": TOOLS,
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    req = Request(
+        f"{OLLAMA_BASE}/api/chat",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(req, timeout=600) as response:
+        raw = json.loads(response.read().decode())
+    message = raw.get("message") or {}
+    # Normalize Ollama tool calls to the OpenAI shape the loop expects.
+    calls = message.get("tool_calls") or []
+    normalized = []
+    for index, call in enumerate(calls):
+        function = call.get("function") or {}
+        arguments = function.get("arguments") or {}
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+        normalized.append({
+            "id": f"ollama_call_{index}",
+            "type": "function",
+            "function": {
+                "name": function.get("name"),
+                "arguments": arguments,
+            },
+        })
+    if normalized:
+        message["tool_calls"] = normalized
+    return message
+
+
+def call_member(member, messages):
+    """Route one chat request to the member's provider."""
+    provider = (member.get("provider") or "").lower()
+    if provider == "puter":
+        from puter_provider import chat as puter_chat
+        return puter_chat(messages, tools=TOOLS)
+    if provider == "ollama":
+        return call_ollama(member, messages)
+    if provider == "openrouter":
+        return call_model(member.get("model"), messages)
+    raise RuntimeError(f"Unsupported provider: {provider}")
+
+
+def run_member_loop(member, messages):
+    """Full tool loop against one non-pool brain. Returns the final answer."""
+    current_messages = list(messages)
+
+    print()
+    print("=" * 78)
+    print("GENIE")
+    print(f"Brain: {member.get('name')} (@{member.get('handle')})")
+    print(f"Tier:  {member.get('provider')} / {member.get('model')}")
+    print("=" * 78)
+
+    for _round in range(MAX_TOOL_ROUNDS):
+        _check_cancel()
+        response = call_member(member, current_messages)
+
+        content = clean_content(response.get("content"))
+        tool_calls = response.get("tool_calls") or []
+
+        assistant_message = {
+            "role": "assistant",
+            "content": response.get("content"),
+        }
+        if tool_calls:
+            assistant_message["tool_calls"] = tool_calls
+
+        current_messages.append(assistant_message)
+
+        if tool_calls:
+            for call in tool_calls:
+                _check_cancel()
+                function = call.get("function") or {}
+                name = function.get("name")
+                raw_args = function.get("arguments") or "{}"
+
+                try:
+                    args = json.loads(raw_args)
+                except Exception:
+                    args = {}
+
+                print(f"[tool] {name}")
+
+                result = execute_tool(name, args)
+
+                current_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+
+            continue
+
+        if content.strip():
+            print(content)
+            speak(content)
+            return content
+
+        raise RuntimeError("EMPTY_RESPONSE")
+
+    raise RuntimeError("TOOL_LOOP_LIMIT")
+
+
+def run_free_pool(task, messages, preferred_model=None):
+    """The OpenRouter FREE worker fleet: ranked catalog with failover."""
     models = refresh_catalog()
 
     if not models:
@@ -910,11 +1168,6 @@ def run_agent(task, preferred_model=None):
 
     attempted = set()
 
-    messages = [
-        {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": task}
-    ]
-
     for model in ranked:
         model_id = model.get("id")
 
@@ -934,6 +1187,7 @@ def run_agent(task, preferred_model=None):
             current_messages = list(messages)
 
             for _round in range(MAX_TOOL_ROUNDS):
+                _check_cancel()
                 response = call_model(model_id, current_messages)
 
                 content = clean_content(response.get("content"))
@@ -954,6 +1208,7 @@ def run_agent(task, preferred_model=None):
 
                 if tool_calls:
                     for call in tool_calls:
+                        _check_cancel()
                         function = call.get("function") or {}
                         name = function.get("name")
                         raw_args = function.get("arguments") or "{}"
@@ -988,11 +1243,114 @@ def run_agent(task, preferred_model=None):
             raise RuntimeError("TOOL_LOOP_LIMIT")
 
         except Exception as e:
+            # A user-requested stop is not a model failure: never fail over,
+            # just hand the cancellation straight back to the caller.
+            if isinstance(e, RuntimeError) and str(e) == "CANCELLED":
+                raise
             print(f"Model failed: {e}")
             print("Trying next capable FREE model...")
             continue
 
     raise RuntimeError("All capable FREE models failed.")
+
+
+def run_agent(task, preferred_model=None, history=None):
+    """Run one objective through the GENIE intelligence stack.
+
+    GENIE decides the brain automatically:
+      simple task  -> local worker first, cloud only if needed
+      complex task -> flagship brains, FREE pool, then local as last resort
+    Every tier recovers automatically into the next one.
+
+    history: optional list of prior {"role": "user"|"assistant", "content": str}
+    turns. When provided, GENIE carries the conversation forward instead of
+    starting from a blank slate.
+    """
+    global CANCEL_REQUESTED
+    CANCEL_REQUESTED = False
+
+    messages = [
+        {"role": "system", "content": SYSTEM},
+    ]
+
+    # Conversational memory: replay the bounded recent transcript so GENIE
+    # keeps context across turns without the caller hand-building prompts.
+    for turn in (history or [])[-(MAX_SESSION_TURNS * 2):]:
+        if not isinstance(turn, dict):
+            continue
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            messages.append({"role": role, "content": content})
+
+    messages.append({"role": "user", "content": task})
+
+    # An explicit manual pick goes straight to the FREE pool, honored first.
+    if preferred_model:
+        return run_free_pool(task, messages, preferred_model)
+
+    chain, complexity = build_brain_chain(task)
+
+    pool_index = None
+    for index, member in enumerate(chain):
+        if (member.get("provider") or "").lower() == "openrouter":
+            pool_index = index
+            break
+
+    pre_pool = chain[:pool_index] if pool_index is not None else chain
+    post_pool = chain[pool_index + 1:] if pool_index is not None else []
+
+    labels = [m.get("handle") for m in chain] or ["openrouter-free"]
+    print()
+    print("-" * 78)
+    print(f"GENIE AUTO ROUTER • task class: {complexity.upper()}")
+    print(f"Brain chain: {' -> '.join(labels)}")
+    print("-" * 78)
+
+    def try_member(member):
+        if not provider_available(member):
+            print(f"[router] {member.get('handle')} unavailable right now - skipping")
+            return None
+        try:
+            return run_member_loop(member, messages)
+        except RuntimeError as exc:
+            if str(exc) == "CANCELLED":
+                raise
+            print(f"Brain failed: {exc}")
+            print("Escalating to the next brain in the chain...")
+            return None
+        except Exception as exc:
+            print(f"Brain failed: {exc}")
+            print("Escalating to the next brain in the chain...")
+            return None
+
+    # Tier 1: routed brains before the FREE pool.
+    for member in pre_pool:
+        _check_cancel()
+        answer = try_member(member)
+        if answer is not None:
+            return answer
+
+    # Tier 2: the OpenRouter FREE worker fleet.
+    try:
+        _check_cancel()
+        return run_free_pool(task, messages)
+    except RuntimeError as exc:
+        if str(exc) == "CANCELLED":
+            raise
+        print(f"FREE pool failed: {exc}")
+        if not post_pool:
+            raise
+        print("Recovering to local/emergency brains...")
+
+    # Tier 3: emergency brains after the pool (usually local/offline).
+    for member in post_pool:
+        _check_cancel()
+        answer = try_member(member)
+        if answer is not None:
+            return answer
+
+    raise RuntimeError("All GENIE brains failed - no local, Puter, or FREE model answered.")
 
 
 def show_models():
@@ -1047,9 +1405,28 @@ def doctor():
     print("GENIE DOCTOR")
     print("=" * 78)
 
+    print(f"GENIE:  v{GENIE_VERSION}")
     print(f"Python: {sys.version.split()[0]}")
     print(f"Config: {CONFIG}")
     print(f"Key:    {'OK' if API_KEY else 'MISSING'}")
+
+    routing = load_routing()
+    roster = {m.get("handle"): m for m in load_ai_team()}
+    print()
+    print("INTELLIGENCE STACK (auto routing)")
+    print(f"Policy: {routing['policy']}")
+    for task_class in ("simple", "complex"):
+        handles = routing["chain"].get(task_class) or []
+        rendered = []
+        for handle in handles:
+            member = roster.get(handle)
+            if not member:
+                rendered.append(f"{handle} (missing)")
+                continue
+            status = "up" if provider_available(member) else "down"
+            rendered.append(f"{handle} [{status}]")
+        print(f"  {task_class:8} -> " + " -> ".join(rendered))
+    print()
 
     commander = commander_status()
     print(f"Commander: {commander['live']} - {commander['managed']}")
@@ -1081,6 +1458,70 @@ def doctor():
 
 STATE = CONFIG / "state"
 LEGACY_PID = Path.home() / ".desktop-commander-remote.pid"
+
+# --- Conversational session memory (CLI) ----------------------------------
+# The terminal assistant keeps a bounded transcript across turns AND across
+# restarts, so GENIE remembers what you were just working on.
+SESSION_FILE = STATE / "cli-chat.json"
+MAX_SESSION_TURNS = 12
+
+
+def load_session():
+    """Load the persisted CLI conversation, newest MAX_SESSION_TURNS turns."""
+    try:
+        data = json.loads(SESSION_FILE.read_text())
+        if isinstance(data, list):
+            turns = [
+                t for t in data
+                if isinstance(t, dict)
+                and t.get("role") in ("user", "assistant")
+                and isinstance(t.get("content"), str)
+            ]
+            return turns[-(MAX_SESSION_TURNS * 2):]
+    except Exception:
+        pass
+    return []
+
+
+def save_session(session):
+    """Persist the CLI conversation. Best-effort; never breaks the loop."""
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        SESSION_FILE.write_text(
+            json.dumps(session[-(MAX_SESSION_TURNS * 2):], indent=2)
+        )
+    except Exception:
+        pass
+
+
+def clear_session():
+    save_session([])
+
+
+def export_session(session=None, target=None):
+    """Write the current CLI transcript as Markdown. Returns the path used."""
+    session = session if session is not None else load_session()
+    if target:
+        path = Path(os.path.expanduser(str(target)))
+    else:
+        path = Path.home() / f"genie-chat-{time.strftime('%Y%m%d-%H%M%S')}.md"
+    lines = [
+        "# GENIE conversation",
+        "",
+        f"Exported: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"GENIE version: {GENIE_VERSION}",
+        "",
+    ]
+    for turn in session:
+        who = "You" if turn.get("role") == "user" else "GENIE"
+        lines.append(f"**{who}**")
+        lines.append("")
+        lines.append(str(turn.get("content", "")))
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+    path.write_text("\n".join(lines))
+    return path
 
 
 def commander_status():
@@ -1129,9 +1570,12 @@ def interactive():
     print()
     print("=" * 78)
     print(" GENIE — AUTONOMOUS FREE AI ORCHESTRATOR")
+    print(f" v{GENIE_VERSION} • conversational memory on")
     print("=" * 78)
     print()
     print("Live FREE catalog is refreshed automatically.")
+    print("GENIE now remembers this conversation across turns and restarts.")
+    print("Type /help for session commands.")
     print()
     print("1) CHAT — GENIE AUTO selects the strongest capable FREE model")
     print("2) CHOOSE MODEL — manually select a FREE model")
@@ -1326,7 +1770,12 @@ def interactive():
         print("Invalid selection.")
 
 
-    # Normal conversational objective loop.
+    # Normal conversational objective loop with persistent session memory.
+    session = load_session()
+    if session:
+        print(f"Resumed session: {len(session)} remembered messages. /new clears it.")
+        print()
+
     while True:
         try:
             task = input("Genie> ").strip()
@@ -1345,6 +1794,58 @@ def interactive():
         if task.startswith("/"):
             if task.lower() == "/voice" or task.lower().startswith("/voice "):
                 voice_command(task[6:])
+                continue
+
+            if task.lower() in {"/help", "/?"}:
+                print()
+                print("GENIE SESSION COMMANDS")
+                print("  /help              show this help")
+                print("  /new               clear the conversation memory")
+                print(f"  /history           show the last {MAX_SESSION_TURNS} remembered turns")
+                print("  /save [path]       export the conversation as Markdown")
+                print("  /voice on|off|test spoken replies")
+                print("  /team              show the global AI team roster")
+                print("  /ask @handle msg   ask one team member directly")
+                print("  /hermes            open the main Hermes chat")
+                print("  q | quit | exit    leave GENIE")
+                print()
+                continue
+
+            if task.lower() == "/new":
+                session = []
+                clear_session()
+                print("Session memory cleared. Fresh start.")
+                print()
+                continue
+
+            if task.lower() == "/history":
+                if not session:
+                    print("No conversation remembered yet.")
+                else:
+                    print()
+                    for turn in session:
+                        who = "You  " if turn.get("role") == "user" else "GENIE"
+                        body = str(turn.get("content", "")).strip()
+                        if len(body) > 240:
+                            body = body[:240] + "…"
+                        print(f"{who} | {body}")
+                    print()
+                    print(f"({len(session) // 2} remembered turns • /new clears • /save exports)")
+                print()
+                continue
+
+            if task.lower() == "/save" or task.lower().startswith("/save "):
+                if not session:
+                    print("Nothing to save yet — the session is empty.")
+                    continue
+                parts = task.split(None, 1)
+                target = parts[1].strip() if len(parts) > 1 else None
+                try:
+                    path = export_session(session, target)
+                    print(f"Conversation exported: {path}")
+                except Exception as e:
+                    print(f"Export failed: {e}")
+                print()
                 continue
 
             if task.lower() == "/team":
@@ -1383,12 +1884,25 @@ def interactive():
                 continue
 
             print(f"Unknown command: {task.split()[0]}")
-            print("Available: /voice, /team, /ask @handle message")
+            print("Available: /help, /new, /history, /save, /voice, /team, /ask @handle message")
             print()
             continue
 
         try:
-            run_agent(task, selected)
+            answer = run_agent(task, selected, history=session)
+            session.append({"role": "user", "content": task})
+            session.append({"role": "assistant", "content": answer})
+            session = session[-(MAX_SESSION_TURNS * 2):]
+            save_session(session)
+        except RuntimeError as e:
+            if str(e) == "CANCELLED":
+                print()
+                print("GENIE stopped.")
+                print()
+            else:
+                print()
+                print(f"GENIE ERROR: {e}")
+                print()
         except Exception as e:
             print()
             print(f"GENIE ERROR: {e}")

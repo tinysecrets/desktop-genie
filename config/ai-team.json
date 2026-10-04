@@ -1,16 +1,54 @@
 {
-  "version": 1,
-  "updated": 1790981098,
-  "policy": "free-first; persistent roster; unavailable providers stay registered",
+  "version": 2,
+  "updated": 1791148800,
+  "policy": "free-first; persistent roster; unavailable providers stay registered; auto routing with local-first simple tasks and cloud escalation for complex tasks",
+  "routing": {
+    "version": 1,
+    "policy": "auto; local-first for simple tasks; cloud escalation for complex; free-first; no manual selection required",
+    "description": "GENIE classifies each task and walks the matching brain chain. Unavailable brains are skipped live; failures escalate to the next brain automatically.",
+    "chain": {
+      "simple": [
+        "local-ollama",
+        "hermes-14b",
+        "openrouter-free"
+      ],
+      "complex": [
+        "opus-55",
+        "fable-51",
+        "hermes-405b",
+        "openrouter-free",
+        "local-ollama"
+      ]
+    }
+  },
   "members": [
+    {
+      "handle": "opus-55",
+      "name": "Opus 5.5",
+      "provider": "puter",
+      "model": "anthropic/claude-opus-5.5",
+      "role": "strategic brain / hardest decisions",
+      "priority": 1,
+      "favorite": true,
+      "tier": "brain"
+    },
+    {
+      "handle": "fable-51",
+      "name": "Fable 5.1",
+      "provider": "puter",
+      "model": "fable/fable-5.1",
+      "role": "heavyweight specialist / second opinion",
+      "priority": 2,
+      "tier": "brain"
+    },
     {
       "handle": "hermes-405b",
       "name": "Hermes 4 405B",
       "provider": "puter",
       "model": "nousresearch/hermes-4-405b",
-      "role": "flagship reasoning / general brain",
-      "priority": 1,
-      "favorite": true
+      "role": "major fallback / flagship workhorse",
+      "priority": 3,
+      "tier": "brain"
     },
     {
       "handle": "hermes-3-405b",
@@ -18,7 +56,7 @@
       "provider": "puter",
       "model": "nousresearch/hermes-3-llama-3.1-405b",
       "role": "agentic / conversational 405B",
-      "priority": 2
+      "priority": 4
     },
     {
       "handle": "hermes-14b",
@@ -26,7 +64,7 @@
       "provider": "puter",
       "model": "nousresearch/hermes-4-14b",
       "role": "fast lightweight brain",
-      "priority": 3
+      "priority": 5
     },
     {
       "handle": "hermes-3-70b",
@@ -34,23 +72,25 @@
       "provider": "puter",
       "model": "nousresearch/hermes-3-llama-3.1-70b",
       "role": "fast agent / dialogue",
-      "priority": 4
+      "priority": 6
     },
     {
       "handle": "openrouter-free",
       "name": "OpenRouter FREE Pool",
       "provider": "openrouter",
       "model": "auto",
-      "role": "dynamic free fallback pool",
-      "priority": 20
+      "role": "dynamic free worker fleet / secondary fallback",
+      "priority": 20,
+      "tier": "pool"
     },
     {
       "handle": "local-ollama",
       "name": "Local Ollama",
       "provider": "ollama",
       "model": "auto",
-      "role": "offline/local fallback",
-      "priority": 30
+      "role": "local-first worker / offline emergency brain",
+      "priority": 30,
+      "tier": "local"
     },
     {
       "handle": "openclaw",
