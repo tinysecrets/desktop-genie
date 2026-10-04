@@ -79,6 +79,14 @@ class GenieRegression(unittest.TestCase):
         # Every brain tier must flow through the same policy gate.
         self.assertIn("policy.authorize(name, args, approved=POLICY_APPROVED)", s)
 
+    def test_puter_free_selector_prefers_free_variant(self):
+        import puter_bridge
+        catalog = {"models": [
+            {"id": "nousresearch/hermes-4-405b", "cost": {"input": 1, "output": 1}},
+            {"id": "nousresearch/hermes-4-405b:free", "cost": {"input": 0, "output": 0}},
+        ]}
+        self.assertEqual(puter_bridge.resolve_model("nousresearch/hermes-4-405b", catalog), "nousresearch/hermes-4-405b:free")
+
     def test_team_config_has_routing(self):
         data = json.loads((ROOT / "config" / "ai-team.json").read_text())
         self.assertIn("routing", data)
@@ -90,6 +98,19 @@ class GenieRegression(unittest.TestCase):
             self.assertTrue(steps, f"empty chain for {task_class}")
             for handle in steps:
                 self.assertIn(handle, handles, f"chain handle {handle} missing from roster")
+
+    def test_puter_free_bridge_architecture(self):
+        s = self.read("genie.py")
+        b = self.read("puter_bridge.py")
+        n = self.read("puter_bridge_node.js")
+        for needle in ("puter_bridge", "genie puter login", "genie puter models"):
+            self.assertIn(needle, s)
+        for needle in ("def status", "def models", "def chat", "def login", "PUTER_AUTH_REQUIRED", "_free"):
+            self.assertIn(needle, b)
+        self.assertIn("puter.ai.chat", n)
+        self.assertIn("puter.ai.listModels", n)
+        self.assertIn("puter.auth.signIn", n)
+        self.assertIn("normalize:true", n)
 
     def test_team_config_parses(self):
         data = json.loads((ROOT / "config" / "ai-team.json").read_text())
