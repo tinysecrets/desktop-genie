@@ -24,7 +24,7 @@ import genie_policy as policy
 
 POLICY_APPROVED = False
 
-GENIE_VERSION = "2.2.0"
+GENIE_VERSION = "2.3.0"
 
 MAX_TOOL_ROUNDS = 32
 MAX_OUTPUT = 12000
@@ -992,6 +992,14 @@ def provider_available(member):
     """Live availability probe for one roster member."""
     provider = (member.get("provider") or "").lower()
     if provider == "puter":
+        # Free path: the Puter.js bridge with a signed-in session. Paid path:
+        # the REST fallback, only when PUTER_AUTH_TOKEN is configured.
+        try:
+            import puter_bridge
+            if puter_bridge.available():
+                return True
+        except Exception:
+            pass
         return bool(os.environ.get("PUTER_AUTH_TOKEN", "").strip())
     if provider == "ollama":
         return ollama_pick_model(member.get("model")) is not None
@@ -1060,12 +1068,36 @@ def call_ollama(member, messages):
     return message
 
 
+def call_puter(messages, model=None):
+    """Puter tier: free Puter.js bridge first, paid REST only as fallback.
+
+    The OpenAI-compatible REST endpoints require a paid plan, so the free
+    path is puter.ai.* through the authenticated Puter.js environment.
+    """
+    import puter_bridge
+    resolved = model
+    try:
+        resolved = puter_bridge.resolve_model(model) or model
+    except Exception:
+        pass
+    try:
+        return puter_bridge.chat(messages, model=resolved, tools=TOOLS)
+    except puter_bridge.PuterBridgeError as exc:
+        code = str(exc).split(":")[0]
+        token = os.environ.get("PUTER_AUTH_TOKEN", "").strip()
+        if code in ("PUTER_AUTH_REQUIRED", "PUTER_BRIDGE_NO_PLAYWRIGHT",
+                    "PUTER_LOGIN_TIMEOUT", "PUTER_SDK_MISSING", "PUTER_SDK_NOT_READY") and token:
+            print(f"[puter] free bridge unavailable ({code}); using paid REST fallback")
+            from puter_provider import chat as puter_chat
+            return puter_chat(messages, tools=TOOLS)
+        raise RuntimeError(str(exc))
+
+
 def call_member(member, messages):
     """Route one chat request to the member's provider."""
     provider = (member.get("provider") or "").lower()
     if provider == "puter":
-        from puter_provider import chat as puter_chat
-        return puter_chat(messages, tools=TOOLS)
+        return call_puter(messages, model=member.get("model"))
     if provider == "ollama":
         return call_ollama(member, messages)
     if provider == "openrouter":
@@ -1426,6 +1458,23 @@ def doctor():
             status = "up" if provider_available(member) else "down"
             rendered.append(f"{handle} [{status}]")
         print(f"  {task_class:8} -> " + " -> ".join(rendered))
+    print()
+
+    print("PUTER FREE BRIDGE (puter.ai.* via Puter.js)")
+    try:
+        import puter_bridge
+        pstatus = puter_bridge.status()
+        signed = bool(pstatus.get("signed_in"))
+        print(f"Session:  {'SIGNED IN' if signed else 'NOT SIGNED IN'}")
+        if not signed and pstatus.get("error"):
+            print(f"Detail:   {pstatus['error']}")
+        print(f"Profile:  {pstatus.get('profile')}")
+        if not signed:
+            print("Sign in:  genie puter login   (one-time, visible browser)")
+    except Exception as exc:
+        print(f"Bridge:   unavailable ({exc})")
+    print(f"REST fallback (paid plan): "
+          f"{'configured' if os.environ.get('PUTER_AUTH_TOKEN', '').strip() else 'not configured'}")
     print()
 
     commander = commander_status()
@@ -1868,11 +1917,16 @@ def interactive():
                     print("Unknown team member. Use /team.")
                     continue
                 if member.get("provider") == "puter":
-                    from puter_provider import chat as puter_chat
-                    if not os.environ.get("PUTER_AUTH_TOKEN", "").strip():
-                        print(f"{member.get('name')} is registered, but the Puter bridge is not authenticated yet.")
+                    try:
+                        msg = call_puter(
+                            [{"role": "system", "content": SYSTEM},
+                             {"role": "user", "content": prompt}],
+                            model=member.get("model"),
+                        )
+                    except RuntimeError as exc:
+                        print(f"{member.get('name')} is unavailable right now: {exc}")
+                        print("Free bridge sign-in: genie puter login")
                         continue
-                    msg = puter_chat([{"role":"system","content":SYSTEM},{"role":"user","content":prompt}], tools=TOOLS)
                     answer = clean_content(msg.get("content"))
                     print(f"\nTEAM MEMBER: {member.get('name')}\n{answer}\n")
                     speak(answer)
@@ -1916,7 +1970,7 @@ def self_audit():
     print("=" * 78)
     print("GENIE SELF-AUDIT")
     print("=" * 78)
-    files = ["genie.py", "genie_app.py", "genie_ext.py", "genie_policy.py", "genie_workstation.py", "puter_provider.py"]
+    files = ["genie.py", "genie_app.py", "genie_ext.py", "genie_policy.py", "genie_workstation.py", "puter_bridge.py", "puter_provider.py"]
     failures = []
     for name in files:
         path = CONFIG / name
@@ -1954,6 +2008,72 @@ def self_audit():
     return 0 if not failures else 1
 
 
+def puter_command(argument):
+    """Manage the Puter.js free bridge: status | login | models [filter]."""
+    import puter_bridge
+    parts = (argument or "").strip().split(None, 1)
+    action = (parts[0] or "status").lower()
+
+    if action == "status":
+        state = puter_bridge.status(force=True)
+        print()
+        print("PUTER FREE BRIDGE")
+        print(f"Session:   {'SIGNED IN' if state.get('signed_in') else 'NOT SIGNED IN'}")
+        if state.get("error") and not state.get("signed_in"):
+            print(f"Detail:    {state['error']}")
+        print(f"Playwright:{'OK' if state.get('playwright') else ' missing'}")
+        print(f"Profile:   {state.get('profile')}")
+        if not state.get("signed_in"):
+            print()
+            print("Run `genie puter login` once to sign in through a visible browser.")
+        print()
+        return
+
+    if action == "login":
+        print()
+        print("Opening a visible browser for Puter sign-in...")
+        print("Complete the Puter login in that window; GENIE waits.")
+        try:
+            result = puter_bridge.login()
+            if result.get("already_signed_in"):
+                print("Already signed in - the Puter free bridge is ready.")
+            else:
+                print("Signed in. The Puter free bridge is now live for GENIE.")
+        except puter_bridge.PuterBridgeError as exc:
+            print(f"Login did not complete: {exc}")
+        finally:
+            puter_bridge.close()
+        print()
+        return
+
+    if action == "models":
+        needle = parts[1].strip().lower() if len(parts) > 1 else ""
+        print()
+        print("Fetching the live Puter catalog (puter.ai.listModels)...")
+        try:
+            models = puter_bridge.list_models()
+        except puter_bridge.PuterBridgeError as exc:
+            print(f"Catalog unavailable: {exc}")
+            print()
+            return
+        shown = 0
+        for model in models:
+            model_id = str(model.get("id") or "")
+            name = str(model.get("name") or "")
+            if needle and needle not in model_id.lower() and needle not in name.lower():
+                continue
+            shown += 1
+            cost = model.get("cost") or {}
+            price = f"in={cost.get('input')} out={cost.get('output')} per {cost.get('tokens', '?')}"
+            print(f"{model_id}  [{model.get('provider')}]  {name}  ctx={model.get('context')}  {price}")
+        print()
+        print(f"Models shown: {shown} of {len(models)}")
+        print()
+        return
+
+    print("Usage: genie puter status | login | models [filter]")
+
+
 def main():
     if len(sys.argv) > 1:
         task = " ".join(sys.argv[1:]).strip()
@@ -1962,6 +2082,9 @@ def main():
             raise SystemExit(self_audit())
         if task.lower() in {"doctor", "health"}:
             doctor()
+            return
+        if task.lower() == "puter" or task.lower().startswith("puter "):
+            puter_command(task[5:].strip())
             return
         if not task:
             interactive()

@@ -11,7 +11,7 @@ Launcher: ~/bin/genie
 - `bin/genie`: canonical launcher
 - `assets/`: UI assets
 
-## Intelligence stack (v2.2)
+## Intelligence stack (v2.3)
 
 GENIE is hybrid: **local brain + cloud muscle + automatic recovery.**
 No manual model selection is required — GENIE classifies each task and walks
@@ -31,6 +31,31 @@ Routing behavior:
 - The hard policy gate applies to every tier identically.
 
 `genie doctor` reports the whole chain with live up/down status per brain.
+
+## Puter free bridge (v2.3)
+
+Puter's OpenAI-compatible REST endpoints (`/puterai/openai/v1/*`) require a
+**paid plan** (free accounts get `402 subscription_required`). The free path
+is `puter.ai.*` through an authenticated Puter.js environment, so GENIE runs
+Puter.js inside a persistent local Chromium profile (`~/.config/genie/puter-profile`):
+
+```
+genie puter login            # one-time: visible browser, sign in to Puter
+genie puter status           # session/bridge health
+genie puter models [filter]  # live catalog via puter.ai.listModels()
+```
+
+Bridge behavior:
+- After the one-time sign-in, all Puter brains run headless against the saved
+  session — Hermes 405B / Fable / Opus participate in the automatic chain.
+- The model catalog is discovered dynamically with `puter.ai.listModels()`;
+  roster ids are resolved against the live catalog, and zero-cost `:free`
+  variants are preferred (free-first).
+- Calls use `puter.ai.chat(..., {normalize: true})`, so every vendor returns
+  the OpenAI shape GENIE's tool loop expects.
+- The paid REST path (`puter_provider.py`) is used only when the free bridge
+  is unavailable AND `PUTER_AUTH_TOKEN` is configured.
+- Free-plan limits: 30 AI requests / 10 s, 3 concurrent — ample for GENIE.
 
 ## Conversational memory (v2.1)
 

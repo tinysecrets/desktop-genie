@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""GENIE Puter.js free bridge.
+
+Puter's OpenAI/Anthropic-compatible REST endpoints (/puterai/openai/v1/*,
+/puterai/anthropic/v1/messages) require a PAID plan; free accounts receive
+`402 subscription_required`. The free path is `puter.ai.*` through an
+authenticated Puter.js environment.
+
+This bridge runs Puter.js inside a persistent local Chromium profile:
+
+    genie puter login     # one-time, opens a visible browser to sign in
+    genie puter status    # show bridge/session state
+    genie puter models    # live catalog via puter.ai.listModels()
+
+After the one-time sign-in, every later call runs headless against the saved
+session. The model catalog is discovered dynamically with
+`puter.ai.listModels()` - no hard-coded assumptions about which models exist.
+
+The paid REST fallback (PUTER_AUTH_TOKEN) stays in puter_provider.py and is
+only used when the free bridge is unavailable AND a token is configured.
+"""
+
+import json
+import os
+import threading
+import time
+from pathlib import Path
+
+ROOT = Path.home() / ".config" / "genie"
+STATE = ROOT / "state"
+PROFILE_DIR = Path(os.environ.get("PUTER_PROFILE", str(ROOT / "puter-profile")))
+STATUS_CACHE = STATE / "puter-bridge.json"
+MODEL_CACHE = STATE / "puter-models.json"
+
+BRIDGE_URL = "https://puter.com/"
+STATUS_TTL = 900          # seconds a probe result stays fresh for doctor/router
+MODEL_TTL = 3600          # seconds the model catalog cache stays fresh
+LOGIN_WAIT_SECONDS = 300  # max time to wait for the human during login
+CHAT_TIMEOUT_MS = 600000  # flagship brains can think for a while
+
+_lock = threading.Lock()
+_pw = None
+_context = None
+_page = None
+
+
+class PuterBridgeError(RuntimeError):
+    """Bridge-level failure. The message is a stable machine-readable code."""
+
+
+# --------------------------------------------------------------------------
+# Browser lifecycle
+# --------------------------------------------------------------------------
+
+def _sync_playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except Exception:
+        raise PuterBridgeError("PUTER_BRIDGE_NO_PLAYWRIGHT")
+
+
+def _teardown():
+    global _pw, _context, _page
+    for closer, obj in ((_context, _context), (_pw, _pw)):
+        try:
+            if obj is not None:
+                if closer is _context:
+                    obj.close()
+                else:
+                    obj.stop()
+        except Exception:
+            pass
+    _pw = None
+    _context = None
+    _page = None
+
+
+def _open(headless=True):
+    """Open (or reuse) the persistent Puter browser session."""
+    global _pw, _context, _page
+    if _context is not None and _page is not None:
+        try:
+            if not _page.is_closed():
+                return _page
+        except Exception:
+            pass
+        _teardown()
+
+    sync_playwright = _sync_playwright()
+    _pw = sync_playwright().start()
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+    kwargs = {
+        "headless": bool(headless),
+        "accept_downloads": False,
+        "args": ["--no-first-run", "--no-default-browser-check"],
+    }
+    executable = os.environ.get("PUTER_BROWSER", "/usr/bin/google-chrome")
+    if executable and Path(executable).exists():
+        kwargs["executable_path"] = executable
+
+    _context = _pw.chromium.launch_persistent_context(str(PROFILE_DIR), **kwargs)
+    _page = _context.pages[0] if _context.pages else _context.new_page()
+    return _page
+
+
+def _ensure_page(headless=True):
+    """Return a page on the Puter origin with the SDK ready."""
+    page = _open(headless=headless)
+    try:
+        if "puter.com" not in (page.url or ""):
+            page.goto(BRIDGE_URL, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_function(
+            "() => typeof window.puter !== 'undefined'", timeout=30000
+        )
+    except PuterBridgeError:
+        raise
+    except Exception as exc:
+        raise PuterBridgeError(f"PUTER_SDK_NOT_READY: {exc}")
+    return page
+
+
+# --------------------------------------------------------------------------
+# Session state
+# --------------------------------------------------------------------------
+
+_SIGNED_IN_JS = (
+    "async () => { try { return !!(window.puter && await puter.auth.isSignedIn()); }"
+    " catch (e) { return false; } }"
+)
+
+
+def _signed_in(page):
+    try:
+        return bool(page.evaluate(_SIGNED_IN_JS))
+    except Exception:
+        return False
+
+
+def _read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _write_json(path, data):
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
+def status(force=False):
+    """Probe the bridge. Cached so doctor/router probes stay cheap."""
+    with _lock:
+        cache = _read_json(STATUS_CACHE)
+        if (
+            not force
+            and isinstance(cache, dict)
+            and time.time() - float(cache.get("checked_at") or 0) < STATUS_TTL
+        ):
+            return cache
+
+        result = {
+            "checked_at": time.time(),
+            "signed_in": False,
+            "playwright": True,
+            "profile": str(PROFILE_DIR),
+            "error": None,
+        }
+        try:
+            page = _ensure_page(headless=True)
+            result["signed_in"] = _signed_in(page)
+            if not result["signed_in"]:
+                result["error"] = "PUTER_AUTH_REQUIRED"
+        except PuterBridgeError as exc:
+            result["error"] = str(exc)
+            result["playwright"] = "NO_PLAYWRIGHT" not in str(exc)
+        except Exception as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        _write_json(STATUS_CACHE, result)
+        return result
+
+
+def available():
+    """Quick router probe: is the free bridge usable right now?"""
+    try:
+        return bool(status().get("signed_in"))
+    except Exception:
+        return False
+
+
+def login(timeout=LOGIN_WAIT_SECONDS):
+    """Interactive one-time sign-in using a VISIBLE browser window."""
+    with _lock:
+        page = _ensure_page(headless=False)
+        if _signed_in(page):
+            _write_json(STATUS_CACHE, {
+                "checked_at": time.time(), "signed_in": True,
+                "playwright": True, "profile": str(PROFILE_DIR), "error": None,
+            })
+            return {"ok": True, "already_signed_in": True}
+
+        try:
+            page.evaluate(
+                "() => { try { puter.auth.signIn(); } catch (e) {} }"
+            )
+        except Exception:
+            pass
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(2)
+            if _signed_in(page):
+                _write_json(STATUS_CACHE, {
+                    "checked_at": time.time(), "signed_in": True,
+                    "playwright": True, "profile": str(PROFILE_DIR), "error": None,
+                })
+                return {"ok": True, "already_signed_in": False}
+
+        raise PuterBridgeError("PUTER_LOGIN_TIMEOUT")
+
+
+# --------------------------------------------------------------------------
+# Model catalog (dynamic discovery via puter.ai.listModels)
+# --------------------------------------------------------------------------
+
+_LIST_MODELS_JS = (
+    "async () => {"
+    " if (!window.puter) throw new Error('PUTER_SDK_MISSING');"
+    " const signed = await puter.auth.isSignedIn().catch(() => false);"
+    " if (!signed) throw new Error('PUTER_AUTH_REQUIRED');"
+    " return await puter.ai.listModels();"
+    "}"
+)
+
+
+def list_models(force=False, max_age=MODEL_TTL):
+    """Live Puter catalog, cached for an hour."""
+    with _lock:
+        cache = _read_json(MODEL_CACHE)
+        if (
+            not force
+            and isinstance(cache, dict)
+            and time.time() - float(cache.get("checked_at") or 0) < max_age
+            and isinstance(cache.get("models"), list)
+        ):
+            return cache["models"]
+
+        page = _ensure_page(headless=True)
+        if not _signed_in(page):
+            raise PuterBridgeError("PUTER_AUTH_REQUIRED")
+        try:
+            models = page.evaluate(_LIST_MODELS_JS)
+        except Exception as exc:
+            raise PuterBridgeError(f"PUTER_LIST_MODELS_FAILED: {exc}")
+        if not isinstance(models, list):
+            raise PuterBridgeError("PUTER_LIST_MODELS_EMPTY")
+
+        _write_json(MODEL_CACHE, {"checked_at": time.time(), "models": models})
+        return models
+
+
+def _model_cost(model):
+    cost = model.get("cost") or {}
+    try:
+        return float(cost.get("input") or 0) + float(cost.get("output") or 0)
+    except Exception:
+        return 0.0
+
+
+def _normalize_id(value):
+    value = (value or "").lower()
+    value = value.split("/")[-1]
+    for ch in "-_.: ":
+        value = value.replace(ch, "")
+    return value
+
+
+def resolve_model(requested, models=None):
+    """Map a roster model id onto the live Puter catalog.
+
+    Preference order: exact id, alias, then mutual substring match. Among
+    candidates, a zero-cost `:free` variant wins (GENIE is free-first).
+    Returns the original request when nothing matches, so Puter itself can
+    produce the final error and the router can escalate.
+    """
+    if not requested or requested == "auto":
+        return None
+
+    if models is None:
+        cache = _read_json(MODEL_CACHE)
+        models = cache.get("models") if isinstance(cache, dict) else None
+    if not models:
+        return requested
+
+    wanted = _normalize_id(requested)
+
+    def candidates():
+        found = []
+        for model in models:
+            model_id = model.get("id") or ""
+            aliases = model.get("aliases") or []
+            names = [model_id] + list(aliases) + [model.get("name") or ""]
+            if requested in names or wanted == _normalize_id(model_id):
+                found.append(model)
+                continue
+            if any(wanted and wanted == _normalize_id(n) for n in names):
+                found.append(model)
+                continue
+            if (
+                wanted
+                and (_normalize_id(model_id) in wanted or wanted in _normalize_id(model_id))
+                and len(wanted) >= 6
+            ):
+                found.append(model)
+        return found
+
+    pool = candidates()
+    if not pool:
+        return requested
+
+    # Free-first: prefer zero-cost variants of the same base model.
+    base_ids = {_normalize_id(m.get("id", "").split(":")[0]) for m in pool}
+    expanded = list(pool)
+    for model in models:
+        model_id = model.get("id") or ""
+        if ":" in model_id and _normalize_id(model_id.split(":")[0]) in base_ids:
+            expanded.append(model)
+
+    free = [m for m in expanded if _model_cost(m) == 0]
+    chosen = (free or expanded)[0]
+    return chosen.get("id") or requested
+
+
+# --------------------------------------------------------------------------
+# Chat (the free path for GENIE's puter brains)
+# --------------------------------------------------------------------------
+
+_CHAT_JS = (
+    "async ({messages, model, tools, max_tokens, temperature}) => {"
+    " if (!window.puter) throw new Error('PUTER_SDK_MISSING');"
+    " const signed = await puter.auth.isSignedIn().catch(() => false);"
+    " if (!signed) throw new Error('PUTER_AUTH_REQUIRED');"
+    " const options = {normalize: true};"
+    " if (model) options.model = model;"
+    " if (typeof max_tokens === 'number') options.max_tokens = max_tokens;"
+    " if (typeof temperature === 'number') options.temperature = temperature;"
+    " if (Array.isArray(tools) && tools.length) {"
+    "   options.tools = tools.filter(t => t && t.type === 'function' && t.function && t.function.name);"
+    " }"
+    " const resp = await puter.ai.chat(messages, false, options);"
+    " const message = (resp && resp.message) ? resp.message : (resp || {});"
+    " let content = message.content;"
+    " if (content !== null && content !== undefined && typeof content !== 'string') {"
+    "   try { content = JSON.stringify(content); } catch (e) { content = String(content); }"
+    " }"
+    " const tool_calls = Array.isArray(message.tool_calls) ? message.tool_calls.map((call, index) => {"
+    "   const fn = (call && call.function) ? call.function : {};"
+    "   let args = fn.arguments;"
+    "   if (args !== undefined && args !== null && typeof args !== 'string') {"
+    "     try { args = JSON.stringify(args); } catch (e) { args = '{}'; }"
+    "   }"
+    "   return {id: (call && call.id) ? call.id : ('puter_call_' + index),"
+    "           type: 'function',"
+    "           function: {name: fn.name || null, arguments: args || '{}'}};"
+    " }) : [];"
+    " return {content: content || '', tool_calls: tool_calls,"
+    "         finish_reason: (resp && resp.finish_reason) ? resp.finish_reason : null,"
+    "         served_model: (resp && resp.model) ? resp.model : null};"
+    "}"
+)
+
+
+def chat(messages, model=None, tools=None, max_tokens=12000, temperature=0.2):
+    """Run one chat turn through puter.ai.chat. Returns an OpenAI-style message.
+
+    Raises PuterBridgeError with a stable code on bridge/auth problems so the
+    GENIE router can escalate to the next brain.
+    """
+    with _lock:
+        page = _ensure_page(headless=True)
+        if not _signed_in(page):
+            raise PuterBridgeError("PUTER_AUTH_REQUIRED")
+
+        payload = {
+            "messages": messages,
+            "model": model,
+            "tools": tools or [],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        try:
+            result = page.evaluate(_CHAT_JS, payload, timeout=CHAT_TIMEOUT_MS)
+        except Exception as exc:
+            text = str(exc)
+            for code in ("PUTER_AUTH_REQUIRED", "PUTER_SDK_MISSING"):
+                if code in text:
+                    raise PuterBridgeError(code)
+            raise PuterBridgeError(f"PUTER_CHAT_FAILED: {text[:500]}")
+
+        if not isinstance(result, dict):
+            raise PuterBridgeError("PUTER_EMPTY_RESPONSE")
+        return {
+            "content": result.get("content") or "",
+            "tool_calls": result.get("tool_calls") or None,
+            "served_model": result.get("served_model"),
+            "finish_reason": result.get("finish_reason"),
+        }
+
+
+def close():
+    """Shut the bridge browser down cleanly."""
+    with _lock:
+        _teardown()

@@ -30,7 +30,8 @@ class GenieRegression(unittest.TestCase):
         self.assertIn("workstation.audit(", s)
 
     def test_sources_parse(self):
-        for name in ("genie.py", "genie_app.py", "genie_ext.py", "genie_workstation.py"):
+        for name in ("genie.py", "genie_app.py", "genie_ext.py",
+                     "genie_workstation.py", "puter_bridge.py", "puter_provider.py"):
             ast.parse(self.read(name), filename=name)
 
     # --- GENIE 2.1+: conversational memory, stop control, desktop QoL ---
@@ -95,6 +96,50 @@ class GenieRegression(unittest.TestCase):
         data = json.loads((ROOT / "config" / "ai-team.json").read_text())
         self.assertIsInstance(data.get("members"), list)
         self.assertTrue(data["members"])
+
+    # --- GENIE 2.3+: Puter.js free bridge ---
+
+    def test_puter_bridge_wiring(self):
+        s = self.read("genie.py")
+        # The puter tier must go through the free Puter.js bridge, with the
+        # paid REST path only as an explicit token-gated fallback.
+        self.assertIn("def call_puter", s)
+        self.assertIn("import puter_bridge", s)
+        self.assertIn("puter_bridge.chat(messages, model=resolved, tools=TOOLS)", s)
+        self.assertIn("def puter_command", s)
+        bridge = self.read("puter_bridge.py")
+        self.assertIn("puter.ai.listModels()", bridge)
+        self.assertIn("puter.ai.chat(", bridge)
+        self.assertIn("normalize: true", bridge)
+        self.assertIn("class PuterBridgeError", bridge)
+
+    def test_resolve_model_prefers_free_variant(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "puter_bridge_under_test", ROOT / "puter_bridge.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        catalog = [
+            {"id": "hermes-4-405b", "provider": "nousresearch",
+             "name": "Hermes 4 405B", "cost": {"input": 100, "output": 400}},
+            {"id": "hermes-4-405b:free", "provider": "nousresearch",
+             "name": "Hermes 4 405B (free)", "cost": {"input": 0, "output": 0}},
+            {"id": "claude-opus-5-5", "provider": "claude",
+             "name": "Claude Opus 5.5", "aliases": ["claude-opus-5.5"],
+             "cost": {"input": 500, "output": 2500}},
+        ]
+        # Free-first: the :free variant of the same base model wins.
+        self.assertEqual(
+            mod.resolve_model("nousresearch/hermes-4-405b", catalog),
+            "hermes-4-405b:free")
+        # Alias match resolves to the paid id when no free variant exists.
+        self.assertEqual(
+            mod.resolve_model("anthropic/claude-opus-5.5", catalog),
+            "claude-opus-5-5")
+        # Unknown requests pass through so the router can escalate cleanly.
+        self.assertEqual(mod.resolve_model("mystery/model-x", catalog),
+                         "mystery/model-x")
+        self.assertIsNone(mod.resolve_model("auto", catalog))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

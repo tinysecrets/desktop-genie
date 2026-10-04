@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""Puter REST fallback (PAID plan only).
+
+The OpenAI-compatible endpoints (/puterai/openai/v1/*) require a paid Puter
+plan; free accounts receive `402 subscription_required`. The free path for
+GENIE is the Puter.js bridge in puter_bridge.py. This module is only used
+when PUTER_AUTH_TOKEN is configured AND the free bridge is unavailable.
+"""
 import json, os, urllib.request, urllib.error
 
 MODEL="nousresearch/hermes-4-405b"
