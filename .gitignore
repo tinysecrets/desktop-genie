@@ -6,6 +6,7 @@ __pycache__/
 *.log
 state/
 browser-profile/
+puter-profile/
 vault.key
 openrouter.env
 *.env

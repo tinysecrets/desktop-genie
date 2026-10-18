@@ -24,8 +24,17 @@ VAULT_FILE = STATE / "vault.json"
 VAULT_KEY = STATE / "vault.key"
 SCHEDULE_FILE = STATE / "schedules.json"
 
-for d in (STATE, JOBS, SCREENSHOTS, DOWNLOADS):
+for d in (STATE, JOBS, SCREENSHOTS):
     d.mkdir(parents=True, exist_ok=True)
+
+# Downloads may point at a removable drive via ~/Downloads. If the drive is
+# absent or read-only, keep GENIE importable and store downloads privately
+# under its writable configuration directory instead.
+try:
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
+except OSError:
+    DOWNLOADS = ROOT / "downloads"
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
 
 _pw = None
 _context = None

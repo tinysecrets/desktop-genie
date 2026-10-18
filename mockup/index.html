@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GENIE — Wah-Lah, It's Done (visual replica)</title>
+<style>
+  :root{
+    --bg:#05040A; --panel:#0D0A14; --panel2:#141019; --panel3:#1D1626; --line:#2B2138;
+    --text:#F7FAFF; --dim:#A08FB5; --magenta:#E452C6; --magenta-b:#FF7ADF; --magenta-d:#571F4C;
+    --teal:#3BE8D2; --teal-d:#0B6E68; --gold:#D4AF37; --gold-b:#F0CB58; --gold-soft:#FFD66B;
+    --violet:#8D6BFF; --cream:#F5E9C8; --badge:#0E1B1E; --box:#07060C;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--text); overflow:hidden;
+    font-family:"Noto Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  .scene{position:relative; height:100%; padding:1.2% 3.5%; display:flex; flex-direction:column; gap:1.1vh}
+  .rings{position:absolute; inset:0; pointer-events:none; overflow:hidden}
+  .rings i{position:absolute; border:1px solid #0E0A18; border-radius:50%}
+  .rings i:nth-child(odd){border-color:#0A0812}
+  .rings .glow1{border:none; background:#120A18; width:34%; padding-top:34%; right:22%; top:-20%}
+  .rings .glow2{border:none; background:#07131A; width:34%; padding-top:34%; left:8%; bottom:-22%}
+  .rule{position:absolute; left:3.5%; right:3.5%; top:9.5%; height:1px; background:#241A30}
+
+  /* header */
+  header{display:flex; align-items:center; height:58px; position:relative; z-index:2}
+  .wordmark{font-family:"Noto Serif", Georgia, serif; font-weight:700; font-size:30px; letter-spacing:.5px}
+  .subtitle{color:var(--magenta-b); font-weight:700; font-size:11px; letter-spacing:2px; margin-left:18px; padding-top:9px}
+  header .spacer{flex:1}
+  .badge{background:var(--badge); color:var(--teal); font-weight:700; font-size:10px; letter-spacing:1px; padding:8px 14px; border-radius:3px}
+  .clock{color:var(--gold-soft); font-family:"DejaVu Sans Mono", ui-monospace, monospace; font-weight:700; font-size:13px; margin-left:18px}
+
+  /* columns */
+  .cols{flex:1; display:flex; gap:1.6%; min-height:0; position:relative; z-index:2}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:4px}
+
+  /* sidebar */
+  aside{width:18%; display:flex; flex-direction:column; overflow:hidden}
+  .lbl{color:var(--dim); font-size:8.5px; font-weight:700; letter-spacing:2px; padding:20px 18px 9px}
+  .btn{display:block; width:calc(100% - 20px); margin:3px 10px; text-align:left; border:0; border-radius:3px;
+       background:var(--panel2); color:var(--text); font:700 10.5px "Noto Sans",sans-serif; letter-spacing:.6px;
+       padding:11px 13px; cursor:pointer}
+  .btn:hover{background:var(--panel3)}
+  .btn.primary{background:var(--magenta); color:#090711; font-size:12px; padding:13px 12px; margin:0 12px 14px; width:calc(100% - 24px)}
+  .btn.primary:hover{background:var(--magenta-b)}
+  .btn.mode{background:#241426; color:var(--magenta-b)} .btn.mode:hover{background:#331B36; color:var(--text)}
+  .btn.live{background:#102B2C; color:var(--teal)} .btn.live:hover{background:#174544; color:var(--text)}
+  .btn.ctx{background:#0A0812; color:var(--teal); font-size:9.5px; margin-top:22px}
+  .h-gold:hover{color:var(--gold-soft)} .h-mag:hover{color:var(--magenta-b)} .h-vio:hover{color:var(--violet)} .h-teal:hover{color:var(--teal)}
+  .side-status{margin-top:auto; color:var(--dim); font:8px "DejaVu Sans Mono",monospace; white-space:pre; padding:10px 18px 14px}
+
+  /* center */
+  main{width:51%; display:flex; flex-direction:column; min-height:0; gap:9px}
+  .hero{padding:18px 22px 6px}
+  .eyebrow{color:var(--dim); font-size:8.5px; font-weight:700; letter-spacing:2px}
+  .hero h1{font-family:"Noto Serif",Georgia,serif; font-size:31px; line-height:1.15; margin-top:4px}
+  .orb{position:relative; height:215px; display:flex; align-items:center; justify-content:center}
+  .medallion{width:196px; height:196px; border-radius:50%; overflow:hidden; position:relative;
+             box-shadow:0 0 0 2px var(--gold), 0 0 0 7px #0D0B15, 0 0 0 8px var(--magenta-d), 0 12px 40px #000}
+  .medallion img{width:100%; height:100%; object-fit:cover}
+  .orb .caption{position:absolute; bottom:2px; width:100%; text-align:center; color:var(--gold-soft); font-size:9px; font-weight:700; letter-spacing:2px}
+  .composer{display:flex; background:var(--panel2); border:1px solid #45305A; border-radius:4px}
+  .composer .input{flex:1; padding:14px 16px; color:var(--text); font-size:14px; line-height:1.4}
+  .composer .input .caret{display:inline-block; width:2px; height:15px; background:var(--magenta-b); vertical-align:-2px; animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .send{border:0; border-radius:3px; margin:9px; padding:12px 18px; background:var(--magenta); color:#090711; font:700 10.5px "Noto Sans",sans-serif; letter-spacing:1px; cursor:pointer}
+  .send:hover{background:var(--magenta-b)}
+  .bottombar{display:flex; align-items:center; font-size:9px}
+  .status{color:var(--teal); font-weight:700; letter-spacing:.6px}
+  .bottombar .spacer{flex:1}
+  .chip{border:0; background:var(--panel2); color:var(--dim); font:700 9px "Noto Sans",sans-serif; letter-spacing:1px; padding:6px 10px; border-radius:3px; margin-left:6px; cursor:pointer}
+  .chip:hover{background:var(--panel3); color:var(--text)}
+  .hint{color:var(--dim); margin-left:10px}
+  .chat{flex:1; overflow:auto; padding:16px 20px; border-radius:4px}
+  .role{font-weight:700; font-size:10px; letter-spacing:1.5px; margin-top:10px}
+  .role.you{color:var(--gold-b)} .role.genie{color:var(--teal)}
+  .msg{color:var(--cream); font-family:"Noto Serif",Georgia,serif; font-size:15px; line-height:1.55; margin:6px 0 12px}
+  .divider{color:var(--gold); opacity:.45; font-size:10px; letter-spacing:-1px}
+
+  /* activity */
+  .pulse{width:20%; display:flex; flex-direction:column; min-height:0}
+  .pulse h2{font-family:"Noto Serif",Georgia,serif; font-size:15px; padding:20px 18px 2px}
+  .pulse .live{color:var(--teal); font-size:9.5px; font-weight:700; letter-spacing:1.5px; padding:0 18px 14px}
+  .card{background:var(--panel2); border:1px solid #241A30; border-radius:3px; margin:4px 10px; padding:9px 11px}
+  .card .t{color:var(--dim); font-size:7.5px; font-weight:700; letter-spacing:1.5px}
+  .card .v{font-size:11px; font-weight:700; margin-top:2px}
+  .v.teal{color:var(--teal)} .v.gold{color:var(--gold-soft)} .v.violet{color:var(--violet)} .v.magenta{color:var(--magenta-b)}
+  .stream-lbl{color:var(--magenta-b); font-size:8.5px; font-weight:700; letter-spacing:2px; padding:20px 18px 8px}
+  .stream{flex:1; margin:0 10px 10px; background:var(--box); border-radius:3px; padding:11px; overflow:auto;
+          color:var(--dim); font:8.5px "DejaVu Sans Mono",monospace; line-height:1.7; white-space:pre-wrap}
+  .stream .t{color:var(--teal)} .stream .b{color:var(--magenta-b)} .stream .tool{color:var(--gold-soft)}
+
+  footer{position:relative; z-index:2; color:var(--dim); font-size:9px; letter-spacing:1px; text-align:center; padding-bottom:4px}
+</style>
+</head>
+<body>
+<div class="scene">
+  <div class="rings">
+    <i class="glow1"></i><i class="glow2"></i>
+    <i style="left:26%;top:5%;width:48%;height:90%"></i>
+    <i style="left:23%;top:2%;width:54%;height:96%"></i>
+    <i style="left:20%;top:-1%;width:60%;height:102%"></i>
+    <i style="left:17%;top:-4%;width:66%;height:108%"></i>
+    <i style="left:14%;top:-7%;width:72%;height:114%"></i>
+    <div class="rule"></div>
+  </div>
+
+  <header>
+    <span class="wordmark">GENIE</span>
+    <span class="subtitle">WAH-LAH GENIE &nbsp;·&nbsp; PERSONAL INTELLIGENCE</span>
+    <span class="spacer"></span>
+    <span class="badge">●&nbsp; ONLINE &nbsp;·&nbsp; GUARDED</span>
+    <span class="clock" id="clock">02:47:11 PM &nbsp;·&nbsp; Sat, Oct 04</span>
+  </header>
+
+  <div class="cols">
+    <aside class="panel">
+      <div class="lbl">WISH SHELF</div>
+      <button class="btn primary">＋ &nbsp;NEW WISH</button>
+      <button class="btn h-gold">⚡ &nbsp;Computer health</button>
+      <button class="btn h-mag">✦ &nbsp;Fix something</button>
+      <button class="btn h-vio">◉ &nbsp;Open browser</button>
+      <button class="btn h-teal">▣ &nbsp;Check devices</button>
+      <div class="lbl" style="padding-top:24px">CONTROL</div>
+      <button class="btn mode">✦ &nbsp;GENIE MODE</button>
+      <button class="btn h-teal">◌ &nbsp;TALK TO GENIE</button>
+      <button class="btn h-vio">▤ &nbsp;SEE MY SCREEN</button>
+      <button class="btn live">◈ &nbsp;LIVE WORKSPACE</button>
+      <button class="btn ctx">CONTEXT &nbsp;·&nbsp; ON</button>
+      <div class="side-status">GENIE
+
+47 tools active
+Commander: connected
+Model: AUTO</div>
+    </aside>
+
+    <main>
+      <div class="panel hero">
+        <div class="eyebrow">MAKE SOMETHING HAPPEN</div>
+        <h1>Your command.<br>GENIE's action.</h1>
+        <div class="orb">
+          <div class="medallion"><img src="genie-round.png" alt="Wah-Lah Genie"></div>
+          <div class="caption">WAH-LAH GENIE &nbsp;•&nbsp; READY TO MAKE IT HAPPEN</div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="input">Check my computer health and tell me what needs attention. <span class="caret"></span></div>
+        <button class="send">SEND &nbsp;→</button>
+      </div>
+
+      <div class="bottombar">
+        <span class="status">GENIE ready • wish completed</span>
+        <span class="spacer"></span>
+        <button class="chip">EXPORT CHAT</button>
+        <button class="chip">COPY LAST</button>
+        <span class="hint">CTRL + ENTER &nbsp;/&nbsp; SEND</span>
+      </div>
+
+      <div class="panel chat">
+        <div class="role you">YOU &nbsp;&nbsp;14:02</div>
+        <div class="msg">Check my computer health and tell me what needs attention.</div>
+        <div class="divider">──────────────────────────────────────────────────────────────────────</div>
+        <div class="role genie">GENIE &nbsp;&nbsp;14:03</div>
+        <div class="msg">Health sweep done. Disk 62% free, memory fine, load calm. I restarted two
+          sleepy services — the voice bridge and the watchdog. One thing needs your eyes:
+          <b>/boot is 91% full.</b> Say <i>“I approve”</i> and I'll clear the three oldest kernels,
+          keeping the running one.</div>
+        <div class="divider">──────────────────────────────────────────────────────────────────────</div>
+      </div>
+    </main>
+
+    <div class="panel pulse">
+      <h2>SYSTEM PULSE</h2>
+      <div class="live">LIVE · LOCAL · GUARDED</div>
+      <div class="card"><div class="t">GENIE CORE</div><div class="v teal">READY</div></div>
+      <div class="card"><div class="t">DESKTOP</div><div class="v gold">GUARDED</div></div>
+      <div class="card"><div class="t">TOOLS</div><div class="v violet">47 registered</div></div>
+      <div class="card"><div class="t">ROUTER</div><div class="v magenta">AUTO · v2.3</div></div>
+      <div class="stream-lbl">ACTIVITY STREAM</div>
+      <div class="stream">14:02:04  GENIE started
+14:02:05  <span class="b">chain: opus-55 -&gt; fable-51 -&gt; hermes-405b -&gt; openrouter-free -&gt; local-ollama</span>
+14:02:05  <span class="b">brain: Opus 5.5 (@opus-55)</span>
+14:02:11  <span class="tool">[tool] shell</span>
+14:02:16  <span class="tool">[tool] service</span>
+14:02:22  <span class="tool">[tool] system_info</span>
+14:02:29  completed • 3 tool calls</div>
+    </div>
+  </div>
+
+  <footer>STATIC REPLICA OF THE REBUILT TK THEME · EXACT PALETTE · REAL MASCOT MEDALLION · LIVE APP RUNS ON DEBIAN</footer>
+</div>
+<script>
+  const days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],
+        mons=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  function tick(){
+    const d=new Date();
+    let h=d.getHours()%12||12;
+    const p=d.getHours()<12?"AM":"PM", pad=n=>String(n).padStart(2,"0");
+    document.getElementById("clock").textContent =
+      `${pad(h)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${p}  ·  ${days[d.getDay()]}, ${mons[d.getMonth()]} ${pad(d.getDate())}`;
+  }
+  tick(); setInterval(tick,1000);
+</script>
+</body>
+</html>

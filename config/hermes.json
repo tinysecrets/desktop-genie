@@ -10,5 +10,13 @@
   ],
   "catalog": "puter.ai.listModels()",
   "transport": "Puter.js browser",
+  "bridge": "puter_bridge.py",
+  "bridge_commands": {
+    "status": "genie puter status",
+    "login": "genie puter login",
+    "verify": "genie puter verify",
+    "models": "genie puter models [filter]"
+  },
+  "rest_fallback": "disabled by free-only routing policy",
   "api_keys_in_browser": false
 }
