@@ -21,6 +21,34 @@ from io import BytesIO, StringIO
 import requests
 from PIL import Image, ImageDraw, ImageTk
 
+
+def capture_g8_wav(path, source, env):
+    """Capture PCM from the permanent G8 source and finalize a valid WAV."""
+    import wave
+    path = Path(path)
+    raw_path = path.with_suffix(".pcm")
+    try:
+        proc = subprocess.run(
+            ["timeout", "--signal=TERM", "5s", "parecord", "--device", source,
+             "--raw", "--format=s16le", "--rate=16000", "--channels=1", str(raw_path)],
+            capture_output=True, text=True, timeout=9, env=env,
+        )
+        if proc.returncode not in (0, 124, 143) or not raw_path.is_file() or raw_path.stat().st_size < 32000:
+            raise RuntimeError(proc.stderr.strip() or f"G8 microphone produced too little audio (exit {proc.returncode})")
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(raw_path.read_bytes())
+        if path.stat().st_size <= 44:
+            raise RuntimeError("G8 microphone WAV finalization failed")
+        return proc
+    finally:
+        try:
+            raw_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
 GENIE_DIR = Path.home() / ".config" / "genie"
 STATE_DIR = GENIE_DIR / "state"
 HISTORY_FILE = STATE_DIR / "desktop-chat.json"
@@ -550,43 +578,35 @@ class GenieApp:
             return
         self.listening = True
         self.status.set("Listening for your wish...")
-        self.append_activity("microphone active")
+        self.append_activity("G8 microphone capture started")
         def worker():
-            path = Path(tempfile.gettempdir()) / "genie-voice.wav"
-            mic_started = False
+            path = Path(tempfile.gettempdir()) / f"genie-voice-{os.getpid()}-{threading.get_ident()}.wav"
             try:
-                # GENIE voice is intentionally push-to-talk: activate the S22
-                # microphone bridge only for this capture, then shut it down.
-                mic = subprocess.run(
-                    ["/home/justin/bin/s22-mic", "start"],
-                    capture_output=True, text=True, timeout=15,
-                )
-                if mic.returncode != 0:
-                    raise RuntimeError(mic.stderr.strip() or mic.stdout.strip() or "S22 microphone unavailable")
-                mic_started = True
-                self.root.after(0, lambda: self.append_activity("S22 microphone active"))
-                proc = subprocess.run(
-                    ["arecord", "-q", "-D", "default", "-d", "5",
-                     "-f", "S16_LE", "-r", "16000", "-c", "1", str(path)],
-                    capture_output=True, text=True, timeout=12,
-                )
-                if proc.returncode != 0:
-                    raise RuntimeError(proc.stderr.strip() or "microphone capture failed")
+                policy_path = GENIE_DIR / "audio-policy.conf"
+                if not policy_path.is_file():
+                    raise RuntimeError(f"Desktop audio policy missing: {policy_path}")
+                settings = {}
+                for line in policy_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        settings[key.strip()] = value.strip()
+                source = settings.get("PRIMARY_SOURCE", "").strip()
+                if not source:
+                    raise RuntimeError("PRIMARY_SOURCE missing from desktop audio policy")
+                if settings.get("PRIMARY_POLICY", "").lower() != "permanent":
+                    raise RuntimeError("Genie voice input requires the permanent G8 microphone policy")
+                env = os.environ.copy()
+                env["PULSE_SOURCE"] = source
+                capture_g8_wav(path, source, env)
+                self.root.after(0, lambda: self.append_activity("LG G8 microphone active"))
                 text = self.voice_request(path)
                 self.root.after(0, lambda: self.finish_voice(text))
             except Exception as exc:
                 message = str(exc)
                 self.root.after(0, lambda: self.finish_voice("", message))
             finally:
-                if mic_started:
-                    try:
-                        subprocess.run(
-                            ["/home/justin/bin/s22-mic", "stop"],
-                            capture_output=True, text=True, timeout=15,
-                        )
-                    except Exception:
-                        pass
-                try: path.unlink()
+                try: path.unlink(missing_ok=True)
                 except Exception: pass
         threading.Thread(target=worker, daemon=True).start()
 

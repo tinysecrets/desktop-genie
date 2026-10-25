@@ -192,5 +192,12 @@ class GenieRegression(unittest.TestCase):
         self.assertIsNone(mod._model_cost({"id": "invalid", "cost": {"input": 1, "output": -1}}))
         self.assertIsNone(mod.resolve_model("auto", catalog))
 
+    def test_desktop_voice_uses_permanent_g8_policy(self):
+        app = self.read("genie_app.py")
+        self.assertIn("def capture_g8_wav", app)
+        self.assertIn("PRIMARY_SOURCE", app)
+        self.assertIn("PRIMARY_POLICY", app)
+        self.assertNotIn("/home/justin/bin/s22-mic", app)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
